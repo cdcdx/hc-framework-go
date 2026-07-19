@@ -1,0 +1,118 @@
+# ============================================================
+# Redis Cluster · 3 主 × 3 从（16384 slot 哈希分片）
+# ------------------------------------------------------------
+# 对应 8.4.1 / 8.3：每主 ~3.3 万 ops/s，内存 <1GB，跨机反亲和。
+# 部署顺序：先 apply 本文件（Headless + StatefulSet + 持久卷），
+#           再 apply 末尾的 bootstrap Job 一次性组建集群。
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cluster
+  labels:
+    app: redis
+spec:
+  clusterIP: None                # Headless：供 Pod 间稳定网络标识 + 集群发现
+  ports:
+    - name: client
+      port: 6379
+      targetPort: 6379
+    - name: gossip
+      port: 16379
+      targetPort: 16379
+  selector:
+    app: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-cluster
+spec:
+  serviceName: redis-cluster
+  replicas: 6                    # 3 主 + 3 从
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: redis
+              topologyKey: kubernetes.io/hostname   # 同分片主从绝不共线
+      containers:
+        - name: redis
+          image: redis:7.2
+          command: ["redis-server"]
+          args:
+            - "--cluster-enabled"
+            - "yes"
+            - "--cluster-node-timeout"
+            - "5000"
+            - "--appendonly"
+            - "yes"
+            - "--maxmemory"
+            - "2gb"
+            - "--maxmemory-policy"
+            - "allkeys-lru"
+          ports:
+            - containerPort: 6379
+              name: client
+            - containerPort: 16379
+              name: gossip
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          readinessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: nvme-sc          # 替换为实际 StorageClass
+        resources:
+          requests:
+            storage: 10Gi
+---
+# 一次性引导：把 6 个节点组成 3 主 3 从（--cluster-replicas 1）
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redis-cluster-bootstrap
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: redis:7.2
+          command:
+            - sh
+            - -c
+            - >
+              redis-cli --cluster create
+              redis-cluster-0.redis-cluster:6379
+              redis-cluster-1.redis-cluster:6379
+              redis-cluster-2.redis-cluster:6379
+              redis-cluster-3.redis-cluster:6379
+              redis-cluster-4.redis-cluster:6379
+              redis-cluster-5.redis-cluster:6379
+              --cluster-replicas 1 --cluster-yes

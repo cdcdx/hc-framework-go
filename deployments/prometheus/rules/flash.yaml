@@ -1,0 +1,63 @@
+# deployments/prometheus/rules/flash.yaml
+#
+# 定时抢购「处理超时」(业务码 10309) 容量告警规则。
+#
+# 指标 shop_flash_redeem_timeout_total 在 FlashRedeem 写事务因行锁/连接池等待超过
+# request_timeout deadline 被取消 (context.DeadlineExceeded) 时累加。该错误必伴随事务回滚、
+# 不落库，客户端可安全重试（不会超卖），因此这是「容量不足」信号，不是正确性缺陷。
+#
+# 配套变更：
+#   - internal/metrics/metrics.go       新增 FlashSaleRedeemTimeoutTotal 指标
+#   - internal/service/shop/shop_service.go  FlashRedeem defer 中 errors.Is(DeadlineExceeded) 累加
+#   - internal/model/errors.go          业务码 10309「抢购处理超时，请稍后重试」
+#
+# 接入方式（需写在 prometheus 部署中）：
+#   rule_files:
+#     - /etc/prometheus/rules/flash.yaml   # 挂载 deployments/prometheus/rules
+#   alerting:
+#     alertmanagers:
+#       - static_configs: [{ targets: [alertmanager:9093] }]
+---
+groups:
+  - name: flash-sale-capacity
+    rules:
+      # 1) 尖峰期超时出现：任意窗口内有超时累加即告警（warning）。
+      #    只在「确实有抢购流量」时才有意义，故用 rate 而非 raw counter 增量。
+      - alert: FlashSaleRedeemTimeoutSpike
+        expr: rate(shop_flash_redeem_timeout_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          component: shop-flash
+          business_code: "10309"
+        annotations:
+          summary: "定时抢购处理超时 (10309) 出现尖峰"
+          description: >-
+            近 5m 内 shop_flash_redeem_timeout_total 速率 = {{ $value | humanize }} req/s，
+            表明写事务在 request_timeout（stress 环境 30s）前未完成，多为 DB 连接池/行锁饱和。
+            事务已回滚、零超卖不受影响，但用户体验受损。
+            建议：扩容 DB 连接池/服务端连接数（make mysql-stress-tune）或评估配额分桶。
+          runbook: >-
+            make k6-test-shop-flash 复现；
+            curl -s localhost:8080/metrics | grep shop_flash_redeem_timeout_total
+
+      # 2) 超时占抢购总请求比例超阈值（>1%）：容量严重不足，升级 critical。
+      #    分母用 clamp_min 防除零（无流量时比例无意义，钳到 1e-9 使其为 0）。
+      - alert: FlashSaleRedeemTimeoutRatioHigh
+        expr: |
+          shop_flash_redeem_timeout_total
+            / clamp_min(sum(rate(shop_flash_redeem_total[5m])), 1e-9) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+          component: shop-flash
+          business_code: "10309"
+        annotations:
+          summary: "定时抢购超时占比超 1%（10309 容量告警）"
+          description: >-
+            超时占抢购总请求比例 = {{ $value | humanizePercentage }}，持续 >1% 超过 5m。
+            说明 DB 写容量已无法在 deadline 内消化抢购峰值，必须扩容或优化
+            （扩 GORM max_open_conns + MySQL max_connections / 配额分桶）。
+          runbook: >-
+            make mysql-stress-tune；
+            检查 GORM 连接池 max_open_conns 与 MySQL max_connections 是否饱和

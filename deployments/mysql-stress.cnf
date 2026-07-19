@@ -1,0 +1,39 @@
+# ============================================
+# MySQL 压测容量片段（stress profile）
+# ============================================
+# 用途：为 500 VU 的 k6 结算洪峰（idle_settle）抬高 MySQL 服务端容量，配合
+#       config/config.stress.yaml 的 max_open_conns: 300 使用（应用侧 300+300=600 < 服务端 800，留余量）。
+#
+# 两种应用方式：
+#   ① 运行时立即生效（无需重启，适合已跑着的 `mysql` 容器）：make mysql-stress-tune
+#      —— 通过 SET GLOBAL 动态改；注意 innodb_log_file_size 等静态项无法动态改（见下方标注）。
+#   ② 持久化（推荐，重启后仍生效）：把本文件挂载进容器的 /etc/mysql/conf.d/ 后重启容器，例如：
+#      docker run --name mysql -p 3306:3306 \
+#        -e MYSQL_ROOT_PASSWORD=123456 \
+#        -v $(pwd)/deployments/mysql-stress.cnf:/etc/mysql/conf.d/stress.cnf:ro \
+#        mysql:8.0
+#
+# ⚠️ 压测放宽持久化会牺牲「崩溃不丢已提交事务」的保证，仅用于压测环境，切勿照搬到生产。
+
+[mysqld]
+# —— 连接容量：须 ≥ 应用侧所有实例的 max_open_conns 之和，并留运维/复制/监控余量 ——
+# 默认 151 是 idle_settle 500 VU 下 "Too many connections" / 连接排队长尾的直接成因。
+max_connections            = 800          # 动态可改：SET GLOBAL max_connections=800;
+
+# —— COMMIT 吞吐：默认每次提交 fsync 刷 redo（=1）是 500 写/s 洪峰下的硬天花板 ——
+# 2 = 每秒刷盘一次（崩溃至多丢 1s 已提交事务），显著提升 COMMIT 吞吐；0 更快但更不安全。
+innodb_flush_log_at_trx_commit = 2        # 动态可改：SET GLOBAL innodb_flush_log_at_trx_commit=2;
+
+# binlog 每提交刷盘（=1）在高并发下同样是刷盘瓶颈；压测置 0 交由 OS 定期刷。
+sync_binlog                = 0            # 动态可改：SET GLOBAL sync_binlog=0;（未开 binlog 时无影响）
+
+# —— 缓冲池：热数据/索引常驻内存，减少磁盘随机 IO。按压测机内存调整（建议物理内存 50%~70%）——
+innodb_buffer_pool_size    = 1G          # 动态可改（8.0+）：SET GLOBAL innodb_buffer_pool_size=1073741824;
+
+# —— redo log 容量：越大越能吸收写洪峰、减少 checkpoint 抖动 ——
+# ⚠️ 静态项：无法 SET GLOBAL 动态修改，只能经本文件 + 重启容器生效。
+innodb_log_file_size       = 256M
+innodb_flush_method        = O_DIRECT     # 静态项：绕过 OS page cache 双缓冲，减少内存拷贝
+
+# —— 其它 ——
+skip_name_resolve          = ON           # 静态项：跳过反向 DNS，降低高并发建连延迟（须用 IP/授权按 host）

@@ -1,0 +1,57 @@
+# Build artifacts
+bin/
+dist/
+build/
+server
+
+# Test and coverage
+*.test
+*.out
+*.prof
+coverage.html
+coverage.out
+
+# Development files
+.git/
+.gitignore
+.github/
+docs/
+scripts/
+README.md
+LICENSE
+*.md
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Dependencies
+vendor/
+
+# Environment
+.env
+.env.*
+
+# Data and logs
+data/
+logs/
+dlq/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Docker compose (not needed in image)
+docker-compose*.yml
+
+# K8s deployment manifests (not needed in image)
+deployments/
+
+# Development-only files
+Makefile
+build.sh
+.golangci.yml
+.codebuddy/

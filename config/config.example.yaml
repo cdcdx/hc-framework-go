@@ -1,0 +1,556 @@
+# ============================================
+# 高并发后台框架 · 配置模板（不含密钥）
+# ============================================
+# 本文件是 config.yaml 的「去密钥」模板，用于：
+#   1. 提交到仓库作为配置结构参考（SSOT 见 docs/05_配置参考.md）；
+#   2. 本地/CI 复制为 config.yaml 后，仅填充下方标记为 <CHANGE_ME> 的敏感字段。
+#
+# 安全约定：
+#   - 任何含密钥的字段（JWT 签名密钥、OAuth Client Secret、验证码 Secret、SMTP 密码、
+#     数据库/中间件 DSN 中的密码）请勿提交到仓库。
+#   - 生产环境优先通过环境变量（前缀 APP_，如 APP_AUTH_JWT_SIGNING_KEY=...）或
+#     K8s Secret（deployments/secret.yaml）注入，而非写入明文文件。
+#   - 本地调试可用 config/config.local.yaml（已被 .gitignore 忽略）覆盖默认值。
+#
+# 加载优先级: 文件默认值 → 环境变量覆盖 → 远程配置中心(可选)
+# 环境变量格式: APP_ + 下划线路径，如 APP_SERVER_PORT=8080
+
+# ------------------------------------------
+# 服务配置
+# ------------------------------------------
+server:
+  port: 8080
+  host: "0.0.0.0"
+  mode: "release"          # debug / release / test
+  read_timeout: 30s
+  read_header_timeout: 15s # 读取请求头超时（防慢头攻击，与写超时解耦）；设为 0 则回退 read_timeout
+  write_timeout: 30s
+  idle_timeout: 90s        # keep-alive 空闲连接存活时间；须明显大于客户端心跳间隔(30s)，否则连接被提前关闭导致 "server closed idle connection"/EOF
+  shutdown_timeout: 30s    # 优雅关闭等待时间
+  # 应用层在途请求并发硬上限（0=关闭，默认不限）。达上限即快速失败 503（负载卸载），避免无界 goroutine
+  # 在 DB/下游抖动时堆积压垮后端；容量按容量规划设定，重启生效（详见 config.yaml 注释与文档 20）。
+  concurrency_limit: 0
+  request_timeout: 10s     # 单请求处理上限：给每个请求 ctx 上 deadline，使下游 DB/锁等待有界（防无限挂起，收敛为有界 504，见 13 §3.48）
+  cors:
+    allowed_origins:
+      - "*"
+    allowed_methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    allowed_headers:
+      - Authorization
+      - Content-Type
+      - X-Trace-Id
+
+# ------------------------------------------
+# 缓存配置
+# ------------------------------------------
+cache:
+  l1:
+    enabled: true
+    max_memory_mb: 256
+    default_ttl: 5m
+    num_counters: 10000000   # Ristretto 计数器数量（预期唯一项数的10倍）
+    max_cost: 268435456      # 最大成本（字节），等于 max_memory_mb * 1024 * 1024
+  l2:
+    enabled: true
+    type: "redis"           # redis / valkey
+    addresses:
+      - "127.0.0.1:6379"
+    password: ""            # 生产环境通过环境变量/Secret 注入，勿明文提交
+    db: 0
+    # 连接池：百万设备常驻时心跳（SETEX）峰值约 3.3 万/s、离线扫描批量判活也会占用连接。
+    # 单 Redis 节点建议 pool_size 200~500；Redis Cluster 可按分片均摊。
+    pool_size: 200
+    min_idle_conns: 20
+    dial_timeout: 5s
+    read_timeout: 3s
+    write_timeout: 3s
+    max_pipeline_size: 100  # Pipeline 单次最大命令数
+    sentinel:  # 哨兵模式
+      enabled: false
+      master_name: "mymaster"
+      addresses: []
+    cluster:  # 集群模式
+      enabled: false
+      addresses: []
+  # 热点 Key 检测
+  hotkey:
+    enabled: true
+    window_seconds: 10
+    top_n: 100
+    ttl_multiplier: 3
+  # TTL 随机偏移（防雪崩），范围 [1-offset, 1+offset]
+  ttl_jitter: 0.2
+  # 布隆过滤器
+  bloom:
+    enabled: true
+    capacity: 100000000     # 1 亿容量
+    error_rate: 0.01        # 1% 误判率
+    redis_key: "cache:bloom"
+  # 空值缓存 TTL
+  null_cache_ttl: 60s
+  # 延迟双删间隔
+  double_delete_delay: 500ms
+  # 预估主从复制延迟（用于延迟双删动态放大退避；0=关闭，使用固定 double_delete_delay）
+  replication_lag: 0s
+  # 缓存 Key 命名
+  key_prefix: "hc"
+  # 广播频道
+  invalidate_channel: "cache:invalidate"
+  # 读写降级（需求 §11）：enabled 总开关；read_skip_l2 跳过 L2 直读 DB；write_async 写转异步 Kafka/本地
+  # 注：熔断器（circuit_breaker）打开时会强制全量降级（忽略此处开关，read/write 均降级）
+  degrade:
+    enabled: false
+    read_skip_l2: false
+    write_async: false
+
+# ------------------------------------------
+# 数据库配置
+# ------------------------------------------
+database:
+  # 业务数据（MySQL / PostgreSQL / SQLite）
+  business:
+    driver: "mysql"        # mysql / postgres / sqlite
+    dsn: "file:./data/hc_business.db?cache=shared&_journal_mode=WAL"
+    mysql:
+      master: "mysql://demo:123456@127.0.0.1:3306/hc_business?charset=utf8mb4&parseTime=True"
+      # 预估主从复制延迟（延迟双删退避参考；0=关闭）
+      replication_lag: 0s  # 密码勿提交
+      slaves:
+        - "mysql://demo:123456@127.0.0.1:3307/hc_business?charset=utf8mb4&parseTime=True"
+      max_idle_conns: 25
+      max_open_conns: 120      # 须 ≤ MySQL max_connections(151)，否则高并发触发 Too many connections
+      conn_max_lifetime: 1h
+      slave_ping_interval: 3s
+    postgres:
+      master: "postgres://demo:123456@127.0.0.1:5432/hc_business?sslmode=disable"
+      slaves:
+        - "postgres://demo:123456@127.0.0.1:5432/hc_business?sslmode=disable"
+      max_idle_conns: 25
+      max_open_conns: 120      # 同上，避免超过数据库服务端连接上限
+      conn_max_lifetime: 1h
+  # 用户数据（MongoDB / SQLite）
+  user:
+    driver: "mongodb"        # mongodb / sqlite
+    dsn: "file:./data/hc_users.db?cache=shared&_journal_mode=WAL"
+    mongodb:
+      dsn: "mongodb://demo:123456@127.0.0.1:27017/hc_users?authSource=admin&authMechanism=SCRAM-SHA-1"  # 密码勿提交
+      min_pool_size: 10
+      max_pool_size: 100
+  # 监控数据（ClickHouse / SQLite）
+  monitor:
+    driver: "clickhouse"        # clickhouse / sqlite
+    dsn: "file:./data/hc_monitor.db?cache=shared&_journal_mode=WAL"
+    clickhouse:
+      dsn: "clickhouse://admin:123456@127.0.0.1:19000/hc_monitor?compress=0"  # 密码勿提交
+  # 日志数据（Elasticsearch / SQLite）
+  log:
+    driver: "elasticsearch"        # elasticsearch / sqlite
+    dsn: "file:./data/hc_logs.db?cache=shared&_journal_mode=WAL"
+    elasticsearch:
+      addresses:
+        - "http://127.0.0.1:9200"
+      username: ""
+      password: ""
+      index_prefix: "hc_logs"
+  # 故障切换：主库不可用时 fallback 到备选库
+  fallback:
+    enabled: true
+    fallback_driver: "sqlite"
+  # 读写分离
+  read_write_split:
+    enabled: false
+
+# ------------------------------------------
+# 消息队列配置
+# ------------------------------------------
+mq:
+  type: "kafka"              # kafka / rabbitmq / rocketmq / memory / none（none 与未配置 = 不启用事件总线，仅落库）
+  # 统一消费组：所有队列类型（kafka/rabbitmq/rocketmq/memory）共用的消费组名；
+  # 不填则回落 mq.kafka.consumer.group_id，再回落默认 hc-framework-consumer。
+  # 切类型无需改 group，避免 rocketmq/rabbitmq 下消费组静默变成默认值。
+  consumer_group: "hc-consumer-group"
+  # 统一消费侧配置（重试），供 rabbitmq/memory 使用；kafka 仍用自身 mq.kafka.consumer.*；
+  # rocketmq 的消费失败重试交由服务端 %RETRY%/%DLQ% 处理，此处重试参数对其不生效。
+  # 该段完全不填时：先回落 mq.kafka.consumer.*（向后兼容），仍为零则套用默认值 (5, 1s, 16s)。
+  consumer:
+    retry_max: 5
+    retry_base_delay: 1s
+    retry_max_delay: 16s
+    # prefetch：仅 rabbitmq 生效。channel 预取上限（未 Ack 在途消息数），同时作为有界并发处理上限，
+    # 防止消息洪峰时无限起 goroutine / 占用内存。<=0 用默认值 64。
+    prefetch: 64
+    # concurrency：仅 memory 消费者生效。每 topic 处理 goroutine 数。仅本地开发/测试，默认 1。
+    concurrency: 1
+  kafka:
+    brokers:
+      - "127.0.0.1:9092"
+    producer:
+      acks: "all"
+      enable_idempotence: true
+      compression: "lz4"
+      max_retries: 3
+      delivery_timeout: 5s
+      buffer_memory: 67108864    # 64MB
+      batch_size: 16384          # 16KB
+      max_in_flight: 5
+      queue_size: 8192           # 内存发送队列长度（异步缓冲）
+      max_overflow_workers: 256  # 队列满时溢出发送的最大并发 goroutine 数（C3 限流，避免无限起协程）
+      dlq_enabled: true          # Broker 不可用时降级到本地文件
+      dlq_local_path: "./data/dlq/"
+    consumer:
+      batch_trigger_interval: 1s
+      worker_pool_size: 8
+      retry_max: 5
+      retry_base_delay: 1s
+      retry_max_delay: 16s
+      dlq_suffix: ".dlq"
+      dlq_local_path: "./data/dlq/"
+      close_timeout: 10s         # reader.Close() 兜底超时（C2，避免 broker 不可达时关闭挂起）
+      # 以下对齐参考项目 hc-framework-go，规避 KRaft 下 GroupTopics 触发 -1 Unknown
+      min_bytes: 1024            # 单次拉取最小字节
+      max_bytes: 10485760        # 单次拉取最大字节（10MB）
+      start_from_latest: false   # false=从头消费；true=跳过积压从最新消费
+      # 无消费组模式下 offset 持久化路径（重启续读用），默认 ./data/kafka-offsets.json
+      offset_store_path: "./data/kafka-offsets.json"
+      # 同分区顺序提交（仅保证分区内，不提供跨分区一致性）。false（默认）：worker 池并发处理 +
+      # offset「只增不减」推进；true：每分区串行「处理完一条即同步落盘 offset」，分区内严格有序
+      # 且把崩溃重放窗口缩到最小，代价是单分区并发降为 1。
+      ordered_commit: false
+      # 无消费组模式多实例分区分配（水平扩展，替代消费组再均衡，见 13 §6.5 #1 / §3.53）：
+      # instance_count>1 时本实例仅消费 partition % instance_count == instance_id 的分区，
+      # 多实例各持互不重叠的分区子集，消除「无消费组多实例重复消费」；offset 文件按 instance_id 自动区分。
+      # 单实例保持 instance_count<=1（不裁剪，全量消费）。须配合 scan_sharding / leader_election 使用。
+      instance_id: 0
+      instance_count: 1
+      # 分区查询失败策略（见 13 §6.5 #7 / §3.54）：false（默认，韧性）单 topic 失败仅跳过并继续，
+      # 全部失败才启动失败；true（严格）任一 topic 失败即整体启动失败。
+      partition_fetch_strict: false
+      # 分区扩容热感知轮询间隔（见 13 §6.5 #4 / §3.57）：0（默认，禁用）启动固定分区集、扩容需重启；>0（如 1m）动态感知新分区。
+      partition_refresh_interval: 0s
+      # 文件 offset 落盘间隔（见 13 §6.5 #3 / §3.58）：默认 5s；调小缩短崩溃重放窗口，代价更频繁磁盘写；SQL 存储无视此值。
+      offset_flush_interval: 5s
+      # 多连接开销告警阈值（见 13 §6.5 #8）：reader 数超过该值启动告警；0（默认）不告警。
+      connection_warn_threshold: 0
+      # 消费 lag 可观测（见 13 §6.5 / §3.59）：后台周期抓取各 reader 的 lag/offset 暴露到 Prometheus
+      # （mq_consumer_lag / mq_consumer_offset）。0（默认 15s）用默认；未启用 Prometheus 时为 no-op 不影响消费。
+      lag_scrape_interval: 15s
+      # 消费模式显式声明（配置收敛，见 13 §6.5 / §3.60）："direct"=无消费组按分区直读（默认，规避 KRaft -1 Unknown）；
+      # "group"=消费组模式（当前 kafka-go v0.4.51 在 KRaft 4.0 不可用，配置会启动报错）。空值回落 direct。
+      mode: "direct"
+    topics:
+      user_events: "user-events"
+      idle_events: "idle-events"
+      task_events: "task-events"
+      shop_events: "shop-events"
+      user_points: "user-points"     # 积分可靠投递（Outbox）事件主题
+      cache_events: "cache-events"   # 写降级时投递的缓存失效/刷新事件主题
+  rabbitmq:
+    url: "amqp://guest:guest@127.0.0.1:5672/"
+    # —— 以下为「异步生产者」模型配置（Send 入队即返回，后台 pool_size 个 worker 经 channel 池发布）——
+    send_timeout: 10s            # 发布确认（publisher confirm）等待超时上界，避免确认丢失/极慢时持锁阻塞冻结生产者（仅该 channel），默认 10s
+    pool_size: 8                 # 生产者 channel 池大小（= 异步模型下后台 worker 数），默认 8，高 QPS 可调大（受 broker 每连接 channel 上限约束）
+    queue_size: 8192             # 异步队列长度（队列满转入溢出池）；<=0 用默认 8192
+    max_overflow_workers: 256    # 溢出池最大并发 goroutine 数（限流）；<0 用默认 256
+    dlq_enabled: false           # Broker 不可达/溢出池满时降级到本地文件 DLQ（replay 协程在恢复后自动补发，不丢消息）；建议生产开启
+    dlq_local_path: "./data/dlq/"
+    # 事件→主题映射；不填则回落到 mq.kafka.topics.*
+    topics:
+      user_events: "user-events"
+      idle_events: "idle-events"
+      task_events: "task-events"
+      shop_events: "shop-events"
+      user_points: "user-points"
+      cache_events: "cache-events"
+  rocketmq:
+    endpoints:
+      - "127.0.0.1:9876"
+    access_key: ""
+    secret_key: ""
+    # 单个 broker 地址（如 127.0.0.1:10911）。配置后启动期用 admin API 显式预建主题，
+    # 即使 broker 关闭 autoCreateTopicEnable 也能工作；留空则发探针消息依赖 broker 自动建主题。
+    broker_addr: ""
+    # —— 以下为「异步生产者」模型配置（Send 入队即返回，后台 loop 经 SendSync 发送，对齐 Kafka 生产者）——
+    queue_size: 8192           # 异步发送队列长度（Send 入队即返回），默认 8192
+    max_overflow_workers: 256  # 队列满时溢出发送的最大并发 goroutine 数（限流），默认 256
+    batch_size: 32             # 后台 loop 非阻塞攒批上限（按主题分组逐主题一次 SendSync），减少 broker RTT、压低尾延迟；受单批<=4MB/4096 条约束，<=0 用默认 32
+    # 事件→主题映射；不填则回落到 mq.kafka.topics.*
+    topics:
+      user_events: "user-events"
+      idle_events: "idle-events"
+      task_events: "task-events"
+      shop_events: "shop-events"
+      user_points: "user-points"   # 积分可靠投递（Outbox）事件主题
+      cache_events: "cache-events" # 写降级时投递的缓存失效/刷新事件主题
+
+# ------------------------------------------
+# 认证配置
+# ------------------------------------------
+auth:
+  jwt:
+    algorithm: "HS256"      # RS256 (生产) / HS256 (开发)
+    access_ttl: 2h
+    refresh_ttl: 168h       # 7d
+    issuer: "hc-framework"
+    # RS256 密钥路径（生产环境）
+    private_key_path: ""
+    public_key_path: ""
+    # HS256 签名密钥（开发环境，生产通过 K8s Secret 管理，勿明文提交）
+    signing_key: "<CHANGE_ME>"
+  password:
+    bcrypt_cost: 10
+    min_length: 8
+    require_upper: true
+    require_lower: true
+    require_digit: true
+    require_special: true
+    require_categories: 3   # 至少满足 3 种字符类型
+
+# ------------------------------------------
+# OAuth 配置
+# ------------------------------------------
+oauth:
+  google:
+    client_id: "<CHANGE_ME>"
+    client_secret: "<CHANGE_ME>"
+    redirect_url: "http://localhost:8080/api/v1/auth/google"
+    scopes:
+      - "openid"
+      - "email"
+      - "profile"
+
+# ------------------------------------------
+# 验证码配置
+# ------------------------------------------
+captcha:
+  type: "none"              # tencent / turnstile / recaptcha / hcaptcha / none
+  tencent:
+    app_id: "<CHANGE_ME>"
+    secret_key: "<CHANGE_ME>"
+  turnstile:
+    site_key: "<CHANGE_ME>"
+    secret_key: "<CHANGE_ME>"
+  recaptcha:
+    site_key: "<CHANGE_ME>"
+    secret_key: "<CHANGE_ME>"
+  hcaptcha:
+    site_key: "<CHANGE_ME>"
+    secret_key: "<CHANGE_ME>"
+  trigger:
+    email_per_minute: 5     # 单邮箱 1 分钟内请求上限
+    ip_per_minute: 10       # 单 IP 1 分钟内请求上限
+  whitelist_ttl: 5m         # 验证码通过后白名单有效期
+
+# ------------------------------------------
+# 安全配置
+# ------------------------------------------
+security:
+  ip_limit:
+    register_per_minute: 3
+    login_per_minute: 10
+  account_lock:
+    max_failures: 5
+    lock_duration: 15m
+  login_fail_delays:          # 递增等待（秒），索引为失败次数-1
+    - 0                       # 第1次失败
+    - 0                       # 第2次失败
+    - 5                       # 第3次失败，等 5s
+    - 5                       # 第4次失败
+    - 30                      # 第5次失败，等 30s
+  token_blacklist_enabled: true
+
+# ------------------------------------------
+# 运营管理配置（抢购活动创建/预热/对账等运营接口鉴权）
+# ------------------------------------------
+# admin.token 为运营侧共享密钥，保护 /api/v1/admin/* 接口（与普通用户 JWT 体系分离）。
+# 空串时所有 admin 接口一律返回 403。生产环境强烈建议改用环境变量 APP_ADMIN_TOKEN 注入，
+# 避免明文落地；本地开发可用 openssl rand -hex 24 生成。k6 压测需以 ADMIN_TOKEN 传入同一串。
+admin:
+  token: "a686d57401b12a5a39478fc584244fbbfd1b6a3276e9104b"
+
+# ------------------------------------------
+# 限流配置
+# ------------------------------------------
+ratelimit:
+  enabled: true
+  global:
+    enabled: true           # 全局限流总开关；缺省 false 会导致下方 rate/burst 静默失效（已修复）
+    rate: 20000             # 令牌桶速率（TPS）——压测放宽；生产环境请调回 5000
+    burst: 4000             # 突发容量
+  per_user:
+    enabled: false
+    rate: 100
+    burst: 20
+  per_ip:
+    enabled: false
+    rate: 300
+    burst: 50
+  whitelist:               # 限流白名单（IP / UserID）；同时豁免安全限流（security.ip_limit）
+    - "127.0.0.1"          # 本地压测放行（localhost）；生产环境请移除以保留防爆破防护
+  # 豁免限流的路径前缀：心跳是“在线判活命脉”，被限流返回 429 会误判设备离线，
+  # 故不计入全局 5000 TPS 配额。多设备挂机常驻负载（默认配置 ≈ 3.3 万心跳/秒）需据此豁免或单独高配额。
+  # 商城兑换在零超卖压测中需聚焦库存并发竞争，不被全局配额拦截，故一并豁免。
+  exempt_paths:
+    - "/api/v1/idle/heartbeat"
+    - "/api/v1/shop/redeem"
+
+# ------------------------------------------
+# 熔断器配置
+# ------------------------------------------
+circuit_breaker:
+  enabled: true
+  failure_threshold: 0.5    # 失败率 ≥ 50% 触发 OPEN
+  open_duration: 30s
+  half_open_max_requests: 10
+  interval: 60s             # 统计窗口
+  timeout: 30s              # 单次请求超时
+
+# ------------------------------------------
+# 日志配置
+# ------------------------------------------
+logging:
+  level: "info"             # debug / info / warn / error / fatal
+  format: "console"         # json / console
+  output: "stdout"          # stdout / file
+  file_path: "./logs/app.log"
+  max_size_mb: 100
+  max_backups: 10
+  max_age_days: 30
+  compress: true
+  request_body_max_size: 4096   # 请求体超过 4KB 截断
+  sensitive_fields:
+    - "password"
+    - "token"
+    - "secret"
+    - "authorization"
+
+# ------------------------------------------
+# 链路追踪配置
+# ------------------------------------------
+tracing:
+  enabled: true
+  service_name: "hc-framework"
+  exporter: "otlp"          # otlp / stdout / none
+  otlp:
+    endpoint: "127.0.0.1:4318"   # OTLP/HTTP 端口（Tempo/Jaeger 默认 4318）；本导出器走 HTTP/JSON
+    insecure: true
+  sampler:
+    type: "parentbased_traceidratio"  # parentbased_traceidratio / always_on / always_off
+    rate: 0.1               # 生产环境 10% 采样
+    error_rate: 1.0         # 错误 100% 采样
+
+# ------------------------------------------
+# 监控指标配置
+# ------------------------------------------
+metrics:
+  enabled: true
+  path: "/metrics"
+
+# ------------------------------------------
+# 健康检查配置
+# ------------------------------------------
+health:
+  enabled: true
+  health_path: "/health"
+  ready_path: "/ready"
+  # /health 包含的检查项
+  checks:
+    redis: true
+    database: true
+    kafka: true
+
+# ------------------------------------------
+# 任务系统配置
+# ------------------------------------------
+task:
+  daily_reset_hour: 0       # UTC 时每日重置时间
+  weekly_reset_day: "monday"   # 每周重置日
+  weekly_reset_hour: 0
+
+# ------------------------------------------
+# 挂机系统配置
+# ------------------------------------------
+idle:
+  heartbeat_interval: 30s   # 客户端心跳间隔
+  timeout_threshold: 90s    # 超时阈值（超过此时间无心跳自动离线）
+  points_per_minute: 10     # 每分钟积分
+  daily_points_limit: 14400   # 每日积分上限 (1440分钟 × 10积分/分钟)
+  max_devices: 3            # 同一用户允许同时挂机的最大设备数
+  redis_key_prefix: "idle:active"
+  # 活跃会话集合分片数（离线检测 scanner 遍历用）。集群模式下分片可把大集合打散到多 slot/节点，
+  # 避免单一大 key 成为热点；单机模式无害（仅 N 个小集合）。<=0 退化为单集合。
+  active_set_shards: 256
+  # 事件驱动结算（Keyspace Notification）：心跳 key 过期即触发结算，零轮询、近实时。
+  # 仅 Redis 单机/哨兵模式可靠；集群模式下自动禁用并保留轮询 scanner 兜底。
+  event_driven_settle: true
+  # 心跳时间批量落库（持久化 last_heartbeat_at）。
+  # 心跳已去 DB 化（判活仅写 Redis 标记）。若需保留 last_heartbeat_at（离线分析、重启后近似心跳等），
+  # 开启此项以「每 Pod 本地聚合 + 定时批量 flush」替代「逐次 UPDATE」：高频心跳仅更新内存 map（O(1)），
+  # 由后台定时器每 heartbeat_persist_interval 批量 UPDATE 一次（默认 10s，建议 5~10s），大幅降低 DB 写压力。
+  # 降级路径（Redis 不可用）在未启用时回退为旧逐次 UPDATE 兜底。
+  heartbeat_persist_enabled: false
+  heartbeat_persist_interval: 10s
+  # 离线检测扫描按 Pod 分片：每个 Pod 仅扫描 active_set_shards 中属于自身的分片集合
+  # （按 分片序号 % pod_total == pod_index 取模分配），消除“每副本全量扫描”的 O(K×N) 冗余。
+  # pod_index / pod_total 可由环境变量 HC_POD_INDEX / HC_POD_TOTAL 覆盖（适配 StatefulSet/Deployment 滚动发布）。
+  # 多副本部署务必开启，单/双实例保持关闭（全量扫描）。
+  scan_sharding:
+    enabled: false
+    pod_index: 0
+    pod_total: 1
+    failover: true          # 死分片接管（依赖 leader_election.enabled）；Leader 接管宕机 Pod 的分片
+    # pod_discovery：pod_total 的发现方式。
+    #   "env"（默认）：pod_index/pod_total 来自配置或 HC_POD_INDEX/HC_POD_TOTAL 环境变量（需随 replicas 同步修改）。
+    #   "headless"：pod_total 经 Headless Service 的 DNS A 记录（就绪 Pod 数）动态获得，pod_index 取
+    #       HC_POD_INDEX，否则从 POD_NAME/HOSTNAME 提取 StatefulSet ordinal。适配 HPA 自动扩缩，
+    #       无需手改配置；缩容缺口由 failover 兜底。启用时须填 headless_service 且集群存在对应 Headless Service。
+    pod_discovery: "env"
+    headless_service: ""    # pod_discovery=headless 时必填，如 "hc-framework"
+  # 选主：多副本下仅 Leader 执行“恰好一次”任务（回填、每日/每周任务重置、事件去重清理、Keyspace 通知配置）。
+  # scanner 分片模式下各 Pod 扫描自身分片、不依赖选主；选主仅用于上述单例任务。
+  # L2(Redis) 不可用时自动降级为“每 Pod 各自执行”（乐观锁兜底）。
+  leader_election:
+    enabled: false
+    lock_key: "idle:leader"
+    ttl: 15s
+    renewal: 7s
+  # 离线检测扫描间隔：自研调度器仅解析 cron 表达式的「分钟」字段（支持 * / */N / N），
+  # 实际扫描间隔会被钳制在 [timeout_threshold/3, 2*timeout_threshold] 之间以保证检测及时性。
+  offline_check_interval: "*/30 * * * *"
+  # 百万级容量调优（离线检测 scanner）：
+  #   scan_max_settle_per_cycle：单周期最大结算量，>0 时超出预算的离线成员留待下周期，防止突发离线长阻塞；0=不限制。
+  #   scan_settle_workers：并发结算 worker 数（有界 goroutine pool）；<=0 时默认 32。
+  # 经验值：1M 活跃会话、心跳 30s、超时 90s 时，稳态离线检测每周期仅对“真正过期”的成员回源结算，
+  # 上述两参数主要用于吸收“网络抖动/发布重启”带来的突发离线洪峰。
+  scan_max_settle_per_cycle: 200000
+  scan_settle_workers: 32
+
+# ------------------------------------------
+# 迁移配置
+# ------------------------------------------
+migration:
+  enabled: true
+  auto_migrate: true        # 是否启动时自动执行迁移（开发环境开启，生产环境关闭用 make migrate）
+  path: "./migrations"
+
+# ------------------------------------------
+# 邮件配置（注册确认等事务邮件）
+# ------------------------------------------
+# 默认关闭：enabled=false 时 AuthService 跳过发信，注册流程不受影响；
+# 生产启用后，用户注册成功（含 Google OAuth 新账号）会异步收到确认邮件。
+mail:
+  enabled: false
+  site_name: "HC Framework"        # 邮件中展示的站点名
+  smtp:
+    host: "smtp.example.com"       # SMTP 服务器地址（不含端口）
+    port: 465                       # 465=隐式TLS, 587=STARTTLS, 25=明文
+    username: ""                   # 认证用户名（为空表示匿名）
+    password: ""                   # 密码 / 授权码（勿明文提交，使用环境变量/Secret）
+    from: "no-reply@example.com"   # 发件人地址
+    from_name: "HC Framework"      # 发件人显示名
+    use_tls: true                  # 隐式 TLS（端口 465 场景）；false 时尝试 STARTTLS
+    insecure_skip_verify: false    # 跳过 TLS 证书校验（仅测试/内网自签开启）

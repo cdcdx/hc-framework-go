@@ -1,0 +1,192 @@
+# ============================================================
+# NetworkPolicy（安全组）规则清单
+# ------------------------------------------------------------
+# 落地 8.9 “分区隔离”：默认拒绝所有流量，仅放行“物理链路明细表”中
+# 明确列出的程序间连接。需在启用 CNI（Calico/Cilium）的 K8s 集群中才生效。
+#
+# 命名空间约定：
+#   default        : 框架 Pod、各中间件
+#   ingress-nginx  : ingress-nginx Controller
+#   kube-system    : CoreDNS
+# ============================================================
+
+# —— 0. 默认拒绝：命名空间内默认拒绝所有入/出流量（最小权限起点）——
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: default
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# —— 1. 放行 DNS：所有 Pod 可访问 CoreDNS :53 ——
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: default
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# —— 2. 放行 Ingress 控制器 → 框架 Pod :8080 ——
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-app
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: hc-framework
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# —— 3. 放行 框架 Pod → 各中间件（缓存/数据/消息网）——
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-to-backends
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: hc-framework
+  policyTypes: ["Egress"]
+  egress:
+    # Redis Cluster（数据 :6379 + gossip :16379）
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 16379
+    # MySQL :3306
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mysql
+      ports:
+        - protocol: TCP
+          port: 3306
+    # MongoDB :27017
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mongodb
+      ports:
+        - protocol: TCP
+          port: 27017
+    # ClickHouse :8123/:9000
+    - to:
+        - podSelector:
+            matchLabels:
+              app: clickhouse
+      ports:
+        - protocol: TCP
+          port: 8123
+        - protocol: TCP
+          port: 9000
+    # Elasticsearch :9200
+    - to:
+        - podSelector:
+            matchLabels:
+              app: elasticsearch
+      ports:
+        - protocol: TCP
+          port: 9200
+    # Kafka 客户端 :9092 + 控制器 :9093
+    - to:
+        - podSelector:
+            matchLabels:
+              app: kafka
+      ports:
+        - protocol: TCP
+          port: 9092
+        - protocol: TCP
+          port: 9093
+---
+# —— 4. 放行 框架 Pod → 可观测（Prometheus :9090 / Jaeger :4317 / 配置中心 :8848）——
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-to-observability
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: hc-framework
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+    - to:
+        - podSelector:
+            matchLabels:
+              app: jaeger
+      ports:
+        - protocol: TCP
+          port: 4317
+    - to:
+        - podSelector:
+            matchLabels:
+              app: nacos
+      ports:
+        - protocol: TCP
+          port: 8848
+    # 日志出口到 ES（由 Filebeat 转发，此处放开到 ES 的 :9200 已在第3条覆盖）
+---
+# —— 5. 放行 框架 Pod → 对象存储/外部依赖（备份、OAuth、验证码）——
+# 因目标为集群外，只能用 namespaceSelector+ipBlock 或放开 egress 到特定 CIDR。
+# 以下示例放开到对象存储/外部网关的 443（按实际端点替换为 ipBlock）。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-egress-external
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: hc-framework
+  policyTypes: ["Egress"]
+  egress:
+    # Prometheus/MySQL 备份到对象存储 S3 :443
+    - to:
+        - ipBlock:
+            cidr: 10.20.0.0/16        # 替换为对象存储/专线实际 CIDR
+      ports:
+        - protocol: TCP
+          port: 443
+    # 外部依赖：OAuth(Google) / 验证码(Tencent) 等（按需放开到公网 443）
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443

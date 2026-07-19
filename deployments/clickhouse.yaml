@@ -1,0 +1,134 @@
+# ============================================================
+# ClickHouse · 1 分片 2 副本（监控指标，列式存储）
+# ------------------------------------------------------------
+# 对应 8.2 / 8.3：每 Pod 内嵌 ClickHouse Keeper（2 节点组成协调 quorum），
+# 经 zookeeper 实现副本同步。生产建议再加 1 个 Keeper 凑 3 节点 quorum。
+# 应用 DSN：clickhouse://<user>@clickhouse-0.clickhouse:9000/hc_monitor
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-config
+  labels:
+    app: clickhouse
+data:
+  config.xml: |
+    <clickhouse>
+      <logger><level>information</level></logger>
+      <keeper_server>
+        <tcp_port>2181</tcp_port>
+        <server_id from_env="CLICKHOUSE_KEEPER_ID"/>
+        <raft_configuration>
+          <server><id>1</id><hostname>clickhouse-0.clickhouse</hostname><port>9234</port></server>
+          <server><id>2</id><hostname>clickhouse-1.clickhouse</hostname><port>9234</port></server>
+        </raft_configuration>
+      </keeper_server>
+      <clickhouse>
+        <listen_host>0.0.0.0</listen_host>
+        <remote_servers>
+          <default>
+            <shard>
+              <replica><host>clickhouse-0.clickhouse</host><port>9000</port></replica>
+              <replica><host>clickhouse-1.clickhouse</host><port>9000</port></replica>
+            </shard>
+          </default>
+        </remote_servers>
+        <zookeeper>
+          <node><host>clickhouse-0.clickhouse</host><port>2181</port></node>
+          <node><host>clickhouse-1.clickhouse</host><port>2181</port></node>
+        </zookeeper>
+      </clickhouse>
+    </clickhouse>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  labels:
+    app: clickhouse
+spec:
+  clusterIP: None
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+    - name: keeper
+      port: 2181
+      targetPort: 2181
+  selector:
+    app: clickhouse
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+spec:
+  serviceName: clickhouse
+  replicas: 2
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: clickhouse
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:24.3
+          env:
+            # Keeper server_id 由 Pod ordinal 推导（1-based）
+            - name: CLICKHOUSE_KEEPER_ID
+              value: "2"   # 占位；下方 command 用 HOSTNAME ordinal 覆盖
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              export CLICKHOUSE_KEEPER_ID=$(( ${HOSTNAME##*-} + 1 ))
+              exec /entrypoint.sh
+          ports:
+            - containerPort: 8123
+              name: http
+            - containerPort: 9000
+              name: native
+            - containerPort: 2181
+              name: keeper
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/clickhouse
+            - name: config
+              mountPath: /etc/clickhouse-server/config.d/
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: nvme-sc
+        resources:
+          requests:
+            storage: 50Gi
+    - metadata:
+        name: config
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: nvme-sc
+        resources:
+          requests:
+            storage: 1Gi

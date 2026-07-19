@@ -1,0 +1,55 @@
+# deployments/prometheus/alertmanager.yaml
+#
+# Alertmanager 配置：接收 Prometheus 发出的告警，按 severity / component 路由到不同接收方。
+#
+# 配套 rules：deployments/prometheus/rules/flash.yaml
+#   - FlashSaleRedeemTimeoutSpike      (severity=warning,  component=shop-flash)
+#   - FlashSaleRedeemTimeoutRatioHigh  (severity=critical, component=shop-flash)
+#
+# 接入方式：prometheus 部署的 alerting.alertmanagers 指向本 alertmanager:9093；
+# 本文件挂载为 alertmanager 启动参数 --config.file。receiver 的 webhook URL 按实际环境替换。
+global:
+  resolve_timeout: 5m
+
+route:
+  # 默认接收方：未命中下面更具体路由的告警走这里
+  receiver: "default-webhook"
+  group_by: ['alertname', 'component']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # 容量类 critical（含 flash 超时占比超标）单独路由：更及时、独立接收方、更短重复间隔
+    - matchers:
+        - severity = "critical"
+        - component = "shop-flash"
+      receiver: "flash-capacity-pager"
+      group_wait: 10s
+      group_interval: 2m
+      repeat_interval: 30m
+    # 其余 warning（含 flash 尖峰超时）走默认 webhook
+    - matchers:
+        - severity = "warning"
+      receiver: "default-webhook"
+
+receivers:
+  # 本地 webhook 接收器（scripts/webhook_receiver.py，监听宿主机 :9095）。
+  # host.docker.internal 经 compose 的 extra_hosts 映射到宿主机网关；
+  # 生产环境把两个 URL 换成 Slack / PagerDuty / 邮件等真实接收端即可。
+  - name: "default-webhook"
+    webhook_configs:
+      - url: "http://host.docker.internal:9095/alerts"
+        send_resolved: true
+  - name: "flash-capacity-pager"
+    webhook_configs:
+      - url: "http://host.docker.internal:9095/flash"
+        send_resolved: true
+    # 也可在此追加 slack_configs / email_configs / pagerduty_configs
+
+# critical 已触发时抑制同 (alertname, component) 的 warning，避免重复通知
+inhibit_rules:
+  - source_match:
+      severity: "critical"
+    target_match:
+      severity: "warning"
+    equal: ['alertname', 'component']

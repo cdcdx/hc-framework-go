@@ -1,0 +1,512 @@
+# API 参考（API Reference）
+
+> 本文档是 HC Framework 全部 HTTP 接口的**权威契约**：基础约定、请求/响应示例、错误码与字段说明。
+> 接口清单与路由以 `internal/handler/`、`internal/router/` 的真实代码为准；数据模型字段见 [02_需求规格说明书.md](./02_需求规格说明书.md)。
+> 认证能力、限流/熔断、缓存等背景见 [00_文档导航.md](./00_文档导航.md) 与 [03_架构说明.md](./03_架构说明.md)。
+
+---
+
+## 一、基础约定
+
+- **Base URL**：`/api/v1`
+- **鉴权**：除「认证模块公开接口」与「系统接口」外，所有业务接口需在 Header 携带：
+  ```
+  Authorization: Bearer <access_token>
+  ```
+- **Content-Type**：`application/json`（GET 接口无需 body）
+- **密码传输规范**：注册、登录、修改密码的 `password` / `old_password` / `new_password` 字段统一接收 **SHA256 哈希后的 64 位十六进制字符串**（即客户端先对明文做 `sha256(password)` 再提交），防止明文密码在网络中泄露。
+> 密码哈希（bcrypt）、传输规范与请求日志脱敏等数据安全细则，见 [11_安全与防护.md §五](./11_安全与防护.md#五数据安全)（安全专题单一来源）。
+- **统一响应信封**：
+
+  ```json
+  {
+    "code": 0,
+    "message": "success",
+    "data": { },
+    "trace_id": "abc123-def456"
+  }
+  ```
+
+  - 业务成功：`HTTP 200` + 业务 `code=0`。
+  - 参数错误 / 未鉴权 / 无权限 / 限流 / 熔断：`HTTP 400/401/403/429/503` + 对应 `code`（见第六节）。
+  - 业务错误（如邮箱已注册、积分不足）：统一 `HTTP 200` + 业务 `code≠0`（如 `10201`），由客户端按 `code` 分支处理。
+
+- **游标分页响应**（`data` 内）：
+
+  ```json
+  {
+    "code": 0,
+    "message": "success",
+    "data": {
+      "items": [ ],
+      "next_cursor": "123",
+      "has_more": true
+    },
+    "trace_id": "abc123-def456"
+  }
+  ```
+
+  - 请求参数：`cursor`（上一页返回的 `next_cursor`，首页留空）、`limit`（每页条数，默认 20）。
+  - 列表类接口（`idle/records`、`shop/items`、`shop/orders`、`tasks` 等）均采用此结构。
+
+- **限流响应头**：被限流时返回 `HTTP 429`，并带 `Retry-After: <秒>` 与 `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`；`idle/heartbeat` 在 `ratelimit.exempt_paths` 中已豁免，不会被限流误判。
+
+---
+
+## 二、认证模块（公开）
+
+### 2.1 邮箱注册 `POST /api/v1/auth/register`
+
+注册成功后自动签发 JWT，无需再调登录。
+
+**请求体**
+```json
+{
+  "email": "user@example.com",
+  "password": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
+  "nickname": "alice"
+}
+```
+> `password` 为明文密码的 SHA256（64 位十六进制）。`nickname` 可空。触发验证码时还需 `captcha_token`（见 [02_需求规格说明书.md](./02_需求规格说明书.md)）。
+
+**响应** `200`
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "user": { "user_id": "u_1a2b", "email": "user@example.com", "username": "alice", "points_balance": 0, "status": "active" },
+    "access_token": "eyJhbGciOi...",
+    "refresh_token": "eyJhbGciOi..."
+  },
+  "trace_id": "abc123"
+}
+```
+
+**错误码**：`10001`（参数错误，由请求绑定失败返回）、`10201`（邮箱已注册）、`10205`（需验证码，由验证码中间件返回）、`10003`（其他/数据库异常，由 default 分支返回）。
+
+---
+
+### 2.2 邮箱登录 `POST /api/v1/auth/login`
+
+**请求体**
+```json
+{ "email": "user@example.com", "password": "<sha256 hex>" }
+```
+
+**响应** `200`
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "user": { "user_id": "u_1a2b", "email": "user@example.com", "points_balance": 120 },
+    "access_token": "eyJhbGciOi...",
+    "refresh_token": "eyJhbGciOi..."
+  }
+}
+```
+
+**错误码**：`10001`（参数错误）、`10202`（密码错误）、`10203`（账号已锁定或已禁用/删除——非 active 状态统一返回此码）、`10601`（限流，由限流中间件返回）、`10003`（其他错误，由 default 分支返回）。
+
+---
+
+### 2.3 Google OAuth 登录 `POST /api/v1/auth/google`
+
+**请求体**
+```json
+{ "code": "<google authorization code>" }
+```
+
+**响应** `200`：同登录（`user` + `access_token` + `refresh_token`）。首次授权会自动创建账号并异步发送注册确认邮件。
+
+**错误码**：`10001`、`10704`（第三方服务异常）。
+
+---
+
+### 2.4 刷新 Token `POST /api/v1/auth/refresh`
+
+返回**新** Access + Refresh Token，旧 Refresh Token 立即失效（写入黑名单）。
+
+**请求体**
+```json
+{ "refresh_token": "eyJhbGciOi..." }
+```
+
+**响应** `200`
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": { "access_token": "eyJ...", "refresh_token": "eyJ..." }
+}
+```
+
+**错误码**：`10102`（Token 无效——所有刷新失败：过期 / 黑名单 / 无效统一返回此码，由 default 分支返回）。
+
+---
+
+### 2.5 修改密码 `PUT /api/v1/user/password` 🔒 需鉴权
+
+校验旧密码后更新哈希，并将 `pwd_change:{user_id}` 写入黑名单，使该用户**所有已签发 Token 立即失效**。
+
+**请求体**
+```json
+{ "old_password": "<sha256 hex>", "new_password": "<sha256 hex>" }
+```
+
+**响应** `200`
+```json
+{ "code": 0, "message": "success", "data": { "message": "password changed" } }
+```
+
+**错误码**：`10202`（旧密码错误）、`10102`（未鉴权，由 Auth 中间件返回）、`10003`（其他错误，由 default 分支返回）。
+
+---
+
+### 2.6 验证码前端配置 `GET /api/v1/captcha/config`（公开）
+
+返回当前启用的验证码（防水墙）类型与前端渲染所需参数，供 Web/H5 客户端动态加载对应 SDK 并渲染验证码。该接口无需鉴权、也不触发验证码校验，仅作配置下发。
+
+**请求**：无参数（公开接口）。
+
+**响应** `200`：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `type` | string | 验证码类型：`tencent` / `turnstile` / `recaptcha` / `hcaptcha` / `none` |
+| `app_id` | string | `type=tencent` 时返回腾讯验证码 AppID |
+| `site_key` | string | `type=turnstile/recaptcha/hcaptcha` 时返回站点密钥 |
+| `script_src` | string | 对应验证码 SDK 脚本地址（前端动态注入 `<script>`） |
+| `enabled` | bool | `type=none` 时为 `false`，表示未启用验证码 |
+| `trigger.email_per_minute` | int | 单邮箱每分钟触发验证码校验的请求阈值 |
+| `trigger.ip_per_minute` | int | 单 IP 每分钟触发验证码校验的请求阈值 |
+| `whitelist_ttl_seconds` | int | 验证通过后白名单豁免时长（秒） |
+
+> 验证码触发策略与各类型密钥配置见 [11_安全与防护.md §四](./11_安全与防护.md#四限流与熔断) 与 [05_配置参考.md](./05_配置参考.md)；注册/登录接口达到阈值时于响应返回 `10205` / `10603` 并要求前端携带 `captcha_token` 完成验证。
+
+---
+
+## 三、用户模块 🔒 需鉴权
+
+### 3.1 获取个人信息 `GET /api/v1/user/profile`
+
+**响应** `200`：返回 `user` 对象（`user_id` / `email` / `username` / `avatar_url` / `points_balance` / `status` 等）。
+
+**错误码**：`10102`（未鉴权，Auth 中间件）、`10002`（用户不存在）、`10701`（数据库异常）。
+
+### 3.2 更新个人信息 `PUT /api/v1/user/profile`
+
+**请求体**
+```json
+{ "nickname": "alice2", "avatar": "https://cdn.example.com/a.png" }
+```
+> `nickname` 最长 50 字符，`avatar` 最长 500 字符；任一字段为空则保持不变。
+
+**响应** `200`：返回更新后的 `user` 对象。
+**错误码**：`10001`（字段超长）、`10002`（用户不存在）、`10701`（数据库异常）、`10102`（未鉴权，Auth 中间件）。
+
+### 3.3 积分余额 `GET /api/v1/user/points`
+
+**响应** `200`
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": { "user_id": "u_1a2b", "points_balance": 120 }
+}
+```
+
+**错误码**：`10102`（未鉴权，Auth 中间件）、`10002`（用户不存在）、`10701`（数据库异常）。
+
+---
+
+## 四、挂机模块 🔒 需鉴权
+
+> 心跳判活已下沉到 Redis（`idle:hb:*` SETEX），高频低开销；`start`/`stop` 才写 DB。同一用户允许多设备同时挂机（上限 `idle.max_devices`，默认 3）。
+
+### 4.1 开始挂机 `POST /api/v1/idle/start`
+
+**请求体**
+```json
+{ "device_id": "dev-0001" }
+```
+
+**响应** `200`：返回挂机记录对象 `idle_record`（`id` / `user_id` / `device_id` / `start_time` / `status=active` 等）。
+**错误码**：`10001`（缺 `device_id`）、`10003`（设备数已达上限 `idle.max_devices`、设备已在挂机或设备数校验失败等，统一由 default 分支返回 `10003`；代码不返回 `10401`）。
+
+### 4.2 心跳上报 `POST /api/v1/idle/heartbeat`
+
+客户端每 `idle.heartbeat_interval`（默认 30s）上报一次；超时 `idle.timeout_threshold`（默认 90s）无心跳自动离线结算。
+
+**请求体**
+```json
+{ "device_id": "dev-0001" }
+```
+
+**响应** `200`
+```json
+{ "code": 0, "message": "success", "data": { "status": "alive" } }
+```
+**错误码**：`10402`（未在挂机状态）、`10003`（其他错误，由 default 分支返回；代码不返回 `10403`）。
+
+### 4.3 停止全部挂机 `POST /api/v1/idle/stop`
+
+停止该用户**所有设备**的挂机并结算积分（幂等）。
+
+**响应** `200`：返回结算后的挂机记录对象（`status=completed/timeout`、`duration_seconds`、`points_earned`）。
+**错误码**：`10402`（未在挂机状态）、`10003`（其他错误，由 default 分支返回）。
+
+### 4.4 停止指定设备挂机 `POST /api/v1/idle/stop-device`
+
+> 仅停止 `device_id` 指定的单台设备，其余设备继续挂机。该接口已实现但部分旧文档未列出，本文档为权威补充。
+
+**请求体**
+```json
+{ "device_id": "dev-0001" }
+```
+
+**响应** `200`：返回该设备的结算记录对象。
+**错误码**：`10402`（未在挂机状态 / 该设备无活跃会话）、`10003`（其他错误，由 default 分支返回）。
+
+### 4.5 挂机状态 `GET /api/v1/idle/status`
+
+**响应** `200`：返回当前用户所有设备挂机状态（含各 `device_id` 的 `status`、`start_time`、累计时长等）。
+
+**错误码**：`10102`（未鉴权，Auth 中间件）、`10003`（其他错误，由 default 分支返回）。
+
+### 4.6 挂机历史记录 `GET /api/v1/idle/records`
+
+支持游标分页（`cursor` / `limit`，默认 20）。
+
+**响应** `200`：游标分页结构，`items` 为挂机记录数组（`status` / `duration_seconds` / `points_earned` / `start_time` / `end_time`）。
+**错误码**：`10001`（cursor 非法）、`10701`（数据库异常）。
+
+---
+
+## 五、任务模块 🔒 需鉴权
+
+### 5.1 任务列表 `GET /api/v1/tasks`
+
+**响应** `200`：返回任务数组，每项与当前用户进度合并为**嵌套结构**——`task`（任务定义字段：`task_key` / `task_name` / `target_value` / `reward_points` 等）与 `progress`（进度字段：`current_progress` / `is_completed` / `is_claimed`，无进度时该字段省略）。示例：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": [
+    {
+      "task": { "task_key": "daily_login", "task_name": "每日登录", "target_value": 1, "reward_points": 10 },
+      "progress": { "current_progress": 1, "is_completed": true, "is_claimed": false }
+    }
+  ]
+}
+```
+
+> 注意：此处为 `task` / `progress` 两层嵌套，**并非扁平字段**，客户端需按嵌套取值。
+
+**错误码**：`10102`（未鉴权，Auth 中间件）、`10701`（数据库异常）。
+
+### 5.2 任务进度 `GET /api/v1/tasks/progress`
+
+**响应** `200`：返回当前用户各任务进度汇总（每日/周/成就）。进度字段名为 `current`（与 5.1 嵌套 `progress.current_progress` 字段名不同，属实现命名差异，客户端需分别适配）。
+
+**错误码**：`10102`（未鉴权，Auth 中间件）、`10701`（数据库异常）。
+
+### 5.3 领取奖励 `POST /api/v1/tasks/:id/claim`
+
+**路径参数**：`id` 为任务 ID（整数）。
+
+**响应** `200`
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": { "task": { "id": 1, "task_key": "daily_login", "reward_points": 10 }, "reward_points": 10 }
+}
+```
+**错误码**：`10001`（任务 id 非法）、`10002`（任务不存在）、`10501`（任务未完成——进度不足时统一返回此码）、`10502`（已领取）、`10003`（其他错误，由 default 分支返回）。
+
+---
+
+## 六、商城模块 🔒 需鉴权
+
+### 6.1 商品列表 `GET /api/v1/shop/items`
+
+支持游标分页（`cursor` / `limit`）与 `category` 分类筛选。
+
+**响应** `200`：游标分页结构，`items` 为商品数组（`id` / `name` / `price_points` / `stock` / `category` / `is_active` / `image_url`）。
+**错误码**：`10701`。
+
+### 6.2 积分兑换 `POST /api/v1/shop/redeem`
+
+扣减积分 + 乐观锁扣减库存（`WHERE version=?`）+ 生成订单；并发兑换经 `redeem:lock:{user_id}` 串行化，杜绝超卖。
+
+**请求体**
+```json
+{ "item_id": 2, "quantity": 1 }
+```
+
+**响应** `200`：返回订单对象（`id` / `item_id` / `item_name` / `points_spent` / `order_status=completed`）。
+**错误码**：`10001`（参数错误）、`10301`（积分不足）、`10302`（库存不足）、`10303`（商品已下架）、`10304`（并发冲突，请重试）、`10002`（用户不存在）、`10003`（其他错误，由 default 分支返回）。
+
+### 6.3 兑换订单列表 `GET /api/v1/shop/orders`
+
+游标分页（`cursor` / `limit`）。
+
+**响应** `200`：游标分页结构，`items` 为订单数组。
+
+**错误码**：`10102`（未鉴权，Auth 中间件）、`10701`（数据库异常）。
+
+### 6.4 订单详情 `GET /api/v1/shop/orders/:id`
+
+**路径参数**：`id` 订单 ID（整数）。订单归属校验：非本人订单返回 `403`。
+
+**响应** `200`：返回订单对象（含商品快照 `item_name` / `points_spent`）。
+**错误码**：`10001`（id 非法）、`10002`（订单不存在）、`10103`（无权限）。
+
+### 6.5 定时抢购活动列表（进行中） `GET /api/v1/shop/flash/activities`
+
+返回当前进行中的抢购活动（状态 `active` 且处于时间窗内）。活动元信息走三级缓存（TTL 5s）削峰。
+
+**查询参数**：`limit`（每页条数，默认 20）。
+**响应** `200`：
+
+```json
+{
+  "code": 0, "message": "success",
+  "data": [
+    {
+      "id": 1, "item_id": 10, "name": "整点秒杀",
+      "start_time": "2026-07-16T20:00:00Z", "end_time": "2026-07-16T20:30:00Z",
+      "limit_qty": 100, "sold_qty": 0, "per_user_limit": 1,
+      "price_points": 50, "status": "active"
+    }
+  ],
+  "trace_id": "abc"
+}
+```
+
+### 6.6 定时抢购兑换 `POST /api/v1/shop/flash/redeem`
+
+在活动时间窗内抢购限量商品，先到先得；**限量内入库兑换，超出限量直接拒绝不入库**（不创建订单、不扣积分）。
+
+**请求体**：
+
+```json
+{ "activity_id": 1 }
+```
+
+**响应** `200`：抢购成功，返回订单对象（含 `activity_id`）。
+**错误码**：
+
+| code | 含义 |
+|------|------|
+| `10305` | 抢购未开始（未到 `start_time`） |
+| `10306` | 抢购已结束（已过 `end_time` 或状态 `ended`） |
+| `10307` | 已抢光（超出限量，直接拒绝不入库） |
+| `10308` | 已达每人限购数量 |
+| `10101` | 积分不足（抢购价 `price_points`） |
+| `10303` | 商品已下架 / 不存在 |
+| `10002` | 活动不存在 |
+
+> 设计、防超卖两道防线与削峰模型见 [21_定时抢购高并发方案.md](./21_定时抢购高并发方案.md)。
+
+### 6.7 运营管理接口（抢购） `🔑 需 X-Admin-Token`
+
+以下接口挂在 `/api/v1/admin/flash/*`，需请求头 `X-Admin-Token: <admin.token>`（配置 `admin.token`，缺省返回 403），与用户 JWT 体系分离。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/flash/activities` | 活动列表（含已结束，全状态） |
+| GET | `/api/v1/admin/flash/activities/:id` | 活动详情 |
+| POST | `/api/v1/admin/flash/activities` | 创建活动（自动预热 Redis + 写缓存） |
+| PUT | `/api/v1/admin/flash/activities/:id` | 更新活动（限量/时间窗/每人限购/状态；不改动 `sold_qty`） |
+| POST | `/api/v1/admin/flash/activities/:id/end` | 下架 / 结束（置 `ended`） |
+| POST | `/api/v1/admin/flash/activities/:id/warmup` | 手动预热 Redis 库存 |
+| POST | `/api/v1/admin/flash/activities/:id/sync` | 库存对账（以 DB 权威值重置 Redis，事故后修复） |
+
+**创建请求体示例**：
+
+```json
+{
+  "item_id": 10,
+  "name": "整点秒杀",
+  "start_time": "2026-07-16T20:00:00Z",
+  "end_time": "2026-07-16T20:30:00Z",
+  "limit_qty": 100,
+  "per_user_limit": 1,
+  "price_points": 50,
+  "status": "active"
+}
+```
+
+- `limit_qty > 0` 必填；`per_user_limit` 缺省为 1；`start_time` 缺省推导状态（未来=`pending`，过去/现在=`active`）；
+  `end_time` 零值表示不限结束；`price_points` 为抢购价（覆盖商品原价，可为 0）。
+
+---
+
+## 七、系统接口
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/health` | 公开 | 存活检查（含 `redis`/`database`/`kafka` 连通性与延迟，受 `health.checks` 控制） |
+| GET | `/ready` | 公开 | 就绪检查（依赖 + warm-up 完成） |
+| GET | `/metrics` | 公开 | Prometheus 指标（exposition 格式）；**受 `metrics.enabled` 开关控制，路径取自 `metrics.path`**（默认 `/metrics`），关闭时该端点不注册 |
+| GET | `/metrics/cache` | 公开 | 缓存统计 JSON 视图（兼容） |
+| GET | `/swagger/index.html` | 公开 | Swagger UI 接口文档（需 `swag init` 生成 `swagger/`） |
+| PUT | `/debug/loglevel` | 内网 | 动态日志级别：`{"level":"debug"}` |
+| POST | `/debug/reload` | 内网 | 配置热更新重载（返回新 `version`） |
+
+> 探针映射（K8s）：`startup`/`readiness` → `/ready`；`liveness` → `/health`（见 [02_需求规格说明书.md](./02_需求规格说明书.md)）。`/debug/*` 不应暴露到公网。
+
+---
+
+## 八、错误码速查
+
+| 范围 | 模块 | 常见错误码 |
+|------|------|-----------|
+| 0 | 成功 | 0 |
+| 10000-10099 | 通用 | 10001 参数校验失败 / 10002 资源不存在 / 10003 未知错误 / 10004 请求处理超时 |
+| 10100-10199 | 认证 | 10101 Token 过期 / 10102 Token 无效 / 10103 权限不足 / 10104 Token 已失效 |
+| 10200-10299 | 用户 | 10201 邮箱已注册 / 10202 密码错误 / 10203 账号已锁定 / 10204 账号已禁用 / 10205 需验证码 |
+| 10300-10399 | 积分/兑换 | 10301 积分不足 / 10302 库存不足 / 10303 商品已下架 / 10304 重复/并发兑换 / 10305 抢购未开始 / 10306 抢购已结束 / 10307 已抢光(超出限量,不入库) / 10308 已达每人限购 |
+| 10400-10499 | 挂机 | 10401 已在挂机中 / 10402 未在挂机 / 10403 已被踢下线 / 10404 心跳超时 / 10405 已达每日上限 |
+| 10500-10599 | 任务 | 10501 任务未完成 / 10502 已领取 / 10503 任务已过期 / 10504 进度不足 |
+| 10600-10699 | 限流/熔断 | 10601 请求过于频繁 / 10602 服务降级中 / 10603 需通过验证码 |
+| 10700-10799 | 系统 | 10701 DB 异常 / 10702 Redis 异常 / 10703 Kafka 异常 / 10704 第三方服务异常 |
+
+> 错误码完整定义见 `internal/model/errors.go`；本表为权威速查，**分段分配与错误处理语义规范见 [02_需求规格说明书.md §7.3](./02_需求规格说明书.md#73-错误码规范)**。
+
+---
+
+## 九、调用示例（curl）
+
+```bash
+# 1) 注册
+curl -s -X POST http://localhost:8080/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"user@example.com","password":"<sha256 of password>","nickname":"alice"}'
+
+# 2) 登录（拿到 access_token）
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"user@example.com","password":"<sha256 of password>"}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["access_token"])')
+
+# 3) 开始挂机
+curl -s -X POST http://localhost:8080/api/v1/idle/start \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"device_id":"dev-0001"}'
+
+# 4) 心跳
+curl -s -X POST http://localhost:8080/api/v1/idle/heartbeat \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"device_id":"dev-0001"}'
+
+# 5) 查看积分
+curl -s http://localhost:8080/api/v1/user/points \
+  -H "Authorization: Bearer $TOKEN"
+```

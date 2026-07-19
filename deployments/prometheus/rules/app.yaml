@@ -1,0 +1,302 @@
+# deployments/prometheus/rules/app.yaml
+#
+# hc-framework 全栈告警：HTTP / 熔断 / 限流 / 负载卸载 / MQ / 缓存 / 调度 / 链路 / 实例存活。
+# 与 flash.yaml（抢购 10309 超时）互补，覆盖非抢购路径的系统健康度。
+#
+# 通用约定：
+#   - for 给足稳定窗口，避免抖动误报；
+#   - severity ∈ {warning, critical}，component 标记子系统，便于 Alertmanager 路由/抑制；
+#   - 比率类用 clamp_min(..., 1e-9) 防除零（无流量时比例无意义）。
+groups:
+  - name: hc-framework-system
+    rules:
+      # 0) 实例存活：抓取失败即最高优先级
+      - alert: ServiceDown
+        expr: up{job="hc-framework"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: platform
+        annotations:
+          summary: "hc-framework 实例不可达"
+          description: "job=hc-framework 的 up = {{ $value }}，持续 1m。Prometheus 已无法抓取 /metrics，可能进程崩溃或网络隔离。"
+          runbook: "docker ps 检查容器；查看应用日志。"
+
+      # 1) HTTP 5xx 错误率（双档）
+      - alert: HTTPErrorRateHigh
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_requests_total[5m])), 1e-9) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: http
+        annotations:
+          summary: "HTTP 5xx 错误率 > 5%"
+          description: "近 5m 5xx 占比 = {{ $value | humanizePercentage }}。后端异常 / 依赖抖动。"
+      - alert: HTTPErrorRateCritical
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_requests_total[5m])), 1e-9) > 0.10
+        for: 5m
+        labels:
+          severity: critical
+          component: http
+        annotations:
+          summary: "HTTP 5xx 错误率 > 10%"
+          description: "近 5m 5xx 占比 = {{ $value | humanizePercentage }}。系统严重退化。"
+
+      # 2) P99 延迟（双档）
+      - alert: HTTPP99LatencyHigh
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: http
+        annotations:
+          summary: "HTTP P99 延迟 > 1s"
+          description: "P99 = {{ $value | humanizeDuration }}。"
+      - alert: HTTPP99LatencyCritical
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 3
+        for: 5m
+        labels:
+          severity: critical
+          component: http
+        annotations:
+          summary: "HTTP P99 延迟 > 3s"
+          description: "P99 = {{ $value | humanizeDuration }}。用户体验严重受损。"
+
+      # 3) 熔断打开
+      - alert: CircuitBreakerOpen
+        expr: max by (route) (circuit_breaker_state) == 2
+        for: 1m
+        labels:
+          severity: critical
+          component: resilience
+        annotations:
+          summary: "熔断已打开 (route={{ $labels.route }})"
+          description: "circuit_breaker_state=2 持续 1m，下游依赖持续失败。"
+          runbook: "检查 route 对应下游健康度与日志。"
+
+      # 4) 限流拒绝 / 应用层负载卸载（load shedding）
+      - alert: RateLimitRejectionsHigh
+        expr: sum(rate(rate_limit_total{result="rejected"}[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: http
+        annotations:
+          summary: "限流拒绝速率偏高"
+          description: "近 5m 限流拒绝 = {{ $value | humanize }} req/s。"
+      - alert: LoadSheddingActive
+        expr: increase(http_concurrency_rejected_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          component: resilience
+        annotations:
+          summary: "应用层并发上限触发负载卸载 (503)"
+          description: "近 5m 被并发上限拒绝 {{ $value | humanize }} 次，在途请求已达 server.concurrency_limit，后端承压。"
+
+      # 5) MQ
+      - alert: MQProducerDLQBacklog
+        expr: sum(mq_dlq_backlog) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: mq
+        annotations:
+          summary: "MQ 生产者 DLQ 积压 > 0"
+          description: "mq_dlq_backlog = {{ $value | humanize }}，broker 不可达/过载导致消息降级落盘（恢复后 replay）。"
+      - alert: MQMessagesDropped
+        expr: increase(mq_producer_dropped_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: mq
+        annotations:
+          summary: "MQ 消息被真正丢弃（不可 replay）"
+          description: "increase = {{ $value | humanize }}，内存缓冲满或总线禁用(mq.type=none)，消息丢失。"
+      - alert: MQConsumerFetchErrors
+        expr: increase(mq_consumer_fetch_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: mq
+        annotations:
+          summary: "MQ 消费侧拉取错误"
+          description: "近 5m fetch errors = {{ $value | humanize }}，broker 瞬时不可用。"
+      - alert: MQConsumerLagHigh
+        expr: max(mq_consumer_lag) > 10000
+        for: 5m
+        labels:
+          severity: warning
+          component: mq
+        annotations:
+          summary: "MQ 消费 lag 过高"
+          description: "max lag = {{ $value | humanize }} 条，消费滞后可能积压事件。"
+
+      # 6) 缓存
+      - alert: CacheL1HitRatioLow
+        expr: cache_l1_hit_ratio < 0.5 and cache_l1_enabled == 1
+        for: 10m
+        labels:
+          severity: warning
+          component: cache
+        annotations:
+          summary: "L1 缓存命中率 < 50%"
+          description: "命中率 = {{ $value | humanizePercentage }}，回源压力增大。"
+
+      # 7) 调度
+      - alert: SchedulerJobPanics
+        expr: increase(scheduler_job_panics_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          component: scheduler
+        annotations:
+          summary: "调度任务 panic (job={{ $labels.job }})"
+          description: "近 10m panic 次数 = {{ $value | humanize }}。"
+      - alert: SchedulerJobFailures
+        expr: increase(scheduler_job_failures_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: scheduler
+        annotations:
+          summary: "调度任务执行失败 (job={{ $labels.job }})"
+          description: "近 10m 失败次数 = {{ $value | humanize }}，底层依赖可能持续不可用。"
+
+      # 8) 链路追踪
+      - alert: TraceSpansDropped
+        expr: increase(trace_spans_dropped_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: tracing
+        annotations:
+          summary: "Trace span 被丢弃"
+          description: "近 10m 丢弃 = {{ $value | humanize }}，OTLP collector 不可达/背压。"
+
+      # 9) 挂机离线扫描耗时
+      - alert: IdleScanSlow
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(idle_scan_duration_seconds_bucket[5m])) by (le)) > 30
+        for: 10m
+        labels:
+          severity: warning
+          component: idle
+        annotations:
+          summary: "挂机离线扫描耗时偏长 (p95>30s)"
+          description: "p95 = {{ $value | humanizeDuration }}。"
+
+  # 运行时资源告警：基于自定义 Registry 注册的 GoCollector / ProcessCollector
+  # （go_goroutines / go_memstats_* / process_*）。这些指标只在应用存活并被抓取时存在。
+  # 阈值按部署规格（容器内存、并发档）调整；压测高并发档 goroutine 天然偏高，按需放宽。
+  - name: hc-framework-runtime
+    rules:
+      # 10) Goroutine 数量过高（疑似泄漏 / 失控增长）
+      - alert: GoroutineCountHigh
+        expr: go_goroutines > 15000
+        for: 10m
+        labels:
+          severity: warning
+          component: runtime
+        annotations:
+          summary: "Goroutine 数量偏高 ({{ $value | humanize }})"
+          description: "go_goroutines = {{ $value | humanize }} 持续 10m。高并发档常态偏高；若非压测期或持续增长，警惕 goroutine 泄漏（未关闭的 context / channel / 连接）。"
+          runbook: "pprof 抓 goroutine 火焰图：go tool pprof http://<host>:8080/debug/pprof/goroutine。"
+      - alert: GoroutineCountCritical
+        expr: go_goroutines > 50000
+        for: 10m
+        labels:
+          severity: critical
+          component: runtime
+        annotations:
+          summary: "Goroutine 数量严重失控 ({{ $value | humanize }})"
+          description: "go_goroutines = {{ $value | humanize }} 持续 10m，内存与调度压力极大，可能 OOM。"
+
+      # 11) Go 堆内存占用过高
+      - alert: GoHeapInuseHigh
+        expr: go_memstats_heap_inuse_bytes > 1.5e9
+        for: 10m
+        labels:
+          severity: warning
+          component: runtime
+        annotations:
+          summary: "Go 堆 inuse 偏高 (>1.5GiB)"
+          description: "go_memstats_heap_inuse_bytes = {{ $value | humanize1024 }} 持续 10m。考虑调 GOGC / GOMEMLIMIT 或排查对象堆积。"
+      - alert: GoHeapInuseCritical
+        expr: go_memstats_heap_inuse_bytes > 3e9
+        for: 10m
+        labels:
+          severity: critical
+          component: runtime
+        annotations:
+          summary: "Go 堆 inuse 严重偏高 (>3GiB)"
+          description: "go_memstats_heap_inuse_bytes = {{ $value | humanize1024 }} 持续 10m，逼近 OOM 风险。"
+
+      # 12) 进程常驻内存过高
+      - alert: ProcessResidentMemoryHigh
+        expr: process_resident_memory_bytes > 2e9
+        for: 15m
+        labels:
+          severity: warning
+          component: runtime
+        annotations:
+          summary: "进程常驻内存偏高 (>2GiB)"
+          description: "process_resident_memory_bytes = {{ $value | humanize1024 }} 持续 15m。"
+      - alert: ProcessResidentMemoryCritical
+        expr: process_resident_memory_bytes > 4e9
+        for: 15m
+        labels:
+          severity: critical
+          component: runtime
+        annotations:
+          summary: "进程常驻内存严重偏高 (>4GiB)"
+          description: "process_resident_memory_bytes = {{ $value | humanize1024 }} 持续 15m，可能触发 cgroup OOMKill。"
+
+      # 13) 打开文件描述符占比过高（FD 耗尽前兆）
+      - alert: OpenFileDescriptorsHigh
+        expr: process_open_fds / clamp_min(process_max_fds, 1) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          component: runtime
+        annotations:
+          summary: "打开 FD 占比 > 85%"
+          description: "process_open_fds/process_max_fds = {{ $value | humanizePercentage }}。连接 / 文件句柄未释放，逼近 ulimit，谨慎 FD 耗尽导致新连接失败。"
+
+  # 数据库（业务/用户/监控/日志/登录）连接池告警：直接观测「连接池/行锁饱和」这一头号容量风险
+  # （对应抢购 10309 超时）。指标由 metrics.RegisterDBPool 注入，标签 db ∈ {business,user,monitor,log,login_record}；
+  # mongodb/clickhouse/elasticsearch 驱动无 *sql.DB，自动跳过（不产生该 db 序列）。
+  - name: hc-framework-db
+    rules:
+      # 14) 连接池等待（耗尽）：有请求因池满而等待，是容量不足的最直接信号
+      - alert: DBPoolWaitCountRising
+        expr: sum by (db) (increase(db_pool_wait_count_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+          component: db
+        annotations:
+          summary: "DB 连接池等待 (db={{ $labels.db }})"
+          description: "近 5m 等待连接次数 = {{ $value | humanize }}，连接池已反复耗尽（max_open_conns 偏小或慢查询/长事务占满）。抢购高峰易引发 10309 超时。"
+          runbook: "上调对应库 max_open_conns；排查慢 SQL / 未提交长事务；参考 db_pool_utilization 面板。"
+
+      # 15) 连接池利用率过高（在途连接逼近上限）
+      - alert: DBPoolUtilizationHigh
+        expr: db_pool_utilization > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: db
+        annotations:
+          summary: "DB 连接池利用率 > 90% (db={{ $labels.db }})"
+          description: "db_pool_utilization = {{ $value | humanizePercentage }}，在途连接逼近 max_open_conns，随时可能触发等待/超时。"
+          runbook: "上调 max_open_conns（须 ≤ 数据库服务端 max_connections）；排查连接泄漏（未 Close 的 *sql.DB / 事务）。"

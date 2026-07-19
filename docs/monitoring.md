@@ -1,0 +1,322 @@
+# hc-framework 监控指南
+
+高并发后台框架的 Prometheus / Alertmanager / Grafana 可观测性方案，覆盖 HTTP、限流、熔断、
+应用层负载卸载、消息队列、缓存、调度、链路追踪、定时抢购与运行时指标，并配套容量告警与可视化面板。
+
+---
+
+## 1. 架构
+
+```
+                          /metrics (独立 Registry)
+  hc-framework (Go)  ───────────────┐
+                                    ▼
+                              Prometheus  ◀── 抓取（scrape_interval=15s）
+                                │   │
+                    rule_files  │   │  alerting
+                    评估告警规则 │   └──────────►  Alertmanager
+                                │                  │ 按 severity/component 路由
+                                │                  ├─ default-webhook  ─► host.docker.internal:9095/alerts
+                                │                  └─ flash-capacity-pager ─► host.docker.internal:9095/flash
+                                ▼
+                            Grafana  ◀── Prometheus / Alertmanager 数据源（面板 + 告警列表）
+```
+
+- **指标来源**：`internal/metrics` 使用独立的 `prometheus.Registry`（不与第三方库的默认 Registry 冲突），
+  通过 `/metrics`（受 `metrics.enabled` 控制，默认路径 `/metrics`）暴露。
+- **为什么独立 Registry**：避免与依赖库（gRPC、Go runtime 等）默认注册表重复注册导致 panic。
+- **运行时指标补充（见 §6 重构）**：已在该 Registry 注册 `GoCollector`/`ProcessCollector`，
+  因此 `go_*` / `process_*` 与业务指标在同一 `/metrics` 端点。
+
+---
+
+## 2. 目录结构
+
+```
+deployments/
+  prometheus/
+    prometheus.yaml            # 抓取配置：targets + rule_files + alerting
+    alertmanager.yaml          # 路由：default / flash-capacity-pager + 抑制规则
+    rules/
+      flash.yaml               # 定时抢购 10309 超时容量告警（warning + critical）
+      app.yaml                 # 全栈系统告警（HTTP/熔断/限流/MQ/缓存/调度/链路/存活）
+      recording.yaml           # 预计算记录规则（错误率 / P99 / 抢购结果分布）
+  grafana/
+    hc-framework-dashboard.json# 仪表盘（含抢购超时面板 + 全栈面板 + 告警列表）
+    provisioning/
+      datasources/datasource.yaml   # Prometheus(DS_PROMETHEUS) + Alertmanager 数据源
+      dashboards/dashboard.yaml     # 自动导入上面的 dashboard JSON
+docker-compose.monitoring.yml # 一键拉起 prometheus + alertmanager + grafana
+scripts/
+  webhook_receiver.py         # 仅依赖标准库的告警 webhook 接收器（本地验证用）
+```
+
+---
+
+## 3. 启动步骤
+
+### 前置条件
+- 已安装 `docker` 与 `docker-compose`（本仓库使用独立二进制 `docker-compose`，非 `docker compose` 插件）。
+- hc-framework 应用已在宿主机 `:8080` 暴露 `/metrics`（见步骤 2）。
+- 宿主机可访问外网以拉取镜像（首次 `up` 会拉取 prometheus / alertmanager / grafana 镜像）。
+
+### 步骤 1 — 启动监控栈
+```bash
+docker-compose -f docker-compose.monitoring.yml up -d
+```
+- 会创建网络 `hc-monitoring-net` 与数据卷。
+- `prometheus:9090`、`alertmanager:9093`、`grafana:3000` 映射到宿主机。
+- compose 已用 `extra_hosts: host.docker.internal:host-gateway` 让容器内 `host.docker.internal`
+  指向宿主机，使 Prometheus 能抓到宿主机上的应用、Alertmanager 能回连宿主机的 webhook 接收器。
+
+### 步骤 2 — 启动应用（暴露 /metrics）
+任选其一，关键是应用监听 `0.0.0.0:8080` 且 `metrics.enabled=true`：
+```bash
+# 本地无依赖快速起（sqlite + mq=none + 关 L2），适合联调监控
+make run-sqlite
+
+# 或压测档（config/config.stress.yaml，连接池 300，需 MySQL/Kafka）
+make run-stress
+```
+> 验证：`curl -s http://127.0.0.1:8080/metrics | grep shop_flash_redeem_timeout_total` 应有输出。
+
+**构建版本注入（`hc_build_info` 带真实版本）**
+- **版本/commit 不在 `cmd/server/main.go` 写死**：`main.go` 仅声明 `var version string` / `var commit string`，
+  实际值完全由构建系统（Makefile）通过 `-ldflags "-X main.version=... -X main.commit=..."` 注入。
+  默认版本号 **`0.1.0`**（项目初始版本，定义在 Makefile 的 `VERSION`），`cmd/server/main.go` 在启动早期
+  调用 `metrics.SetBuildInfo` 暴露到 `hc_build_info`。
+- **commit 脏检查**：git 工作区有未提交修改（含未跟踪文件）时，commit 自动追加 `-dirty` 后缀，例如
+  `7e2bf66`（干净）/ `7e2bf66-dirty`（有改动）；无 git 时为 `unknown`。可显式覆盖：
+  ```bash
+  make build VERSION=0.1.0 COMMIT=abc1234
+  ```
+- **命令行查版本**：`./bin/hcf-server -v`（或 `-version`）会输出 `version` + `commit` 后立即退出，用于快速确认构建产物来源：
+  ```text
+  hc-framework version: 0.1.0
+  commit: 7e2bf66-dirty
+  ```
+- `make run-sqlite` / `make run-stress` 同样走 `go run`，**但已注入** ldflags（`-ldflags="$(LDFLAGS)"`），
+  因此 `version`/`commit` 与 `make build` 一致（含 `-dirty` 脏检查）。（早期版本 `go run` 不注入 ldflags 导致
+  `hc_build_info` 为空，现已修复。）
+- 容器镜像（`build.sh docker`）同样走 `make docker-build`，版本自动注入。
+- 验证：`curl -s http://127.0.0.1:8080/metrics | grep '^hc_build_info'` 应只出现一个真实版本序列。
+
+### 步骤 3 — 启动 webhook 接收器（让告警真正可达）
+> Alertmanager 的 webhook 默认指向 `host.docker.internal:9095`（占位，生产可换成 Slack/PagerDuty/邮件）。
+> 本地用标准库接收器把告警落日志，便于验证整条链路。
+```bash
+python3 scripts/webhook_receiver.py 9095
+# 告警日志写入 /tmp/alertmanager_webhook.log，控制台实时打印
+```
+
+### 步骤 4 — 验证
+```bash
+# 1) 抓取目标健康（应 hc-framework up）
+curl -s "http://127.0.0.1:9090/api/v1/targets" | python3 -c "import sys,json;[print(t['labels']['job'],t['health']) for t in json.load(sys.stdin)['data']['activeTargets']]"
+
+# 2) 告警规则已加载（应看到 flash-sale-capacity / hc-framework-system / hc-framework-recording 三组）
+curl -s "http://127.0.0.1:9090/api/v1/rules" | python3 -c "import sys,json;[print(g['name'],[r['name'] for r in g['rules']]) for g in json.load(sys.stdin)['data']['groups']]"
+
+# 3) 端到端验证告警链路：向 Alertmanager 注入一条合成告警，观察 /tmp/alertmanager_webhook.log
+curl -XPOST http://127.0.0.1:9093/api/v2/alerts -H 'Content-Type: application/json' \
+  -d '[{"labels":{"alertname":"SmokeTest","severity":"warning","component":"http"},"annotations":{"summary":"smoke"}}]'
+sleep 35 && grep -c SmokeTest /tmp/alertmanager_webhook.log   # 期望 >=1
+```
+
+### 网页入口
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| Prometheus | http://127.0.0.1:9090 | Status>Targets 看抓取；Alerts 看告警；Graph 试 PromQL |
+| Alertmanager | http://127.0.0.1:9093 | 看告警路由、静默、分组 |
+| Grafana | http://127.0.0.1:3000 | 默认 admin/admin；若数据卷已预初始化导致密码不符，重置：`docker exec hc-grafana grafana-cli admin reset-admin-password admin` |
+
+---
+
+## 4. 指标目录
+
+> 类型：C=Counter，G=Gauge，H=Histogram。标签列出关键维度。
+
+### HTTP / 限流 / 熔断 / 并发
+| 指标 | 类型 | 标签 | 含义 |
+|------|------|------|------|
+| `http_requests_total` | C | method, path, status | HTTP 请求计数（path 为路由模板，未匹配归并 `unknown`，见 §6） |
+| `http_request_duration_seconds` | H | method, path | HTTP 请求延迟（DefBuckets） |
+| `rate_limit_total` | C | type, result | 限流决策（type=global/per_user/per_ip；result=allowed/rejected） |
+| `circuit_breaker_state` | G | route | 熔断状态（0=closed/1=half-open/2=open） |
+| `circuit_breaker_transitions_total` | C | route, from, to | 熔断状态转换次数 |
+| `http_concurrency_in_flight` | G | — | 应用层并发限流当前在途请求数 |
+| `http_concurrency_rejected_total` | C | — | 并发达上限被负载卸载（503）的累计次数 |
+
+### 挂机（idle）
+| `idle_scan_duration_seconds` | H | — | 离线检测扫描耗时 |
+| `idle_scan_members_total` | G | — | 本次扫描活跃会话数 |
+| `idle_scan_dead_total` | G | — | 本次扫描死亡（心跳过期）会话数 |
+| `idle_settle_total` | C | reason | 结算计数（timeout/completed/skipped） |
+| `idle_repo_errors_total` | C | operation | 仓储 best-effort 失败（incr_daily_points/get_daily_points_db） |
+
+### 缓存
+| `cache_l1_hits_total` / `cache_l1_misses_total` | C | — | L1 命中/未命中累计 |
+| `cache_l1_hit_ratio` | G | — | L1 命中率 [0,1] |
+| `cache_l1_size_bytes` | G | — | L1 近似占用字节 |
+| `cache_l1_evictions_total` | C | — | L1 淘汰累计 |
+| `cache_l1_enabled` / `cache_l2_enabled` / `cache_bloom_enabled` / `cache_hotkey_enabled` | G | — | 各能力开关（1/0） |
+| `cache_hotkey_count` | G | — | 热 key 数量 |
+
+### 数据库（连接池，本次新增）
+由 `metrics.RegisterDBPool` 在 `bootstrap.InitDatabases` 打开各库后注入；标签 `db` ∈
+`{business,user,monitor,log,login_record}`。mongodb / clickhouse / elasticsearch 驱动无 `*sql.DB`，自动跳过（不产生该 db 序列）。
+这是「DB 连接池 / 行锁饱和」这一头号容量风险（对应抢购 10309 超时）的直接观测入口。
+| 指标 | 类型 | 标签 | 含义 |
+|------|------|------|------|
+| `db_pool_open_connections` | G | db | 当前打开连接数（in-use + idle） |
+| `db_pool_in_use_connections` | G | db | 当前在途（被借出）连接数 |
+| `db_pool_idle_connections` | G | db | 空闲连接数 |
+| `db_pool_max_open_connections` | G | db | 最大打开连接数（0 = 不限，如 sqlite） |
+| `db_pool_wait_count_total` | C | db | 因池耗尽而等待连接的累计次数 |
+| `db_pool_wait_duration_seconds_total` | C | db | 等待连接的总耗时 |
+| `db_pool_lifetime_closed_total` | C | db | 因超过 conn_max_lifetime 被关闭的连接数 |
+
+### MQ
+| `mq_producer_send_total` | C | type, topic, result | 生产者发送（result=success/failure） |
+| `mq_producer_dlq_total` | C | type, topic | 降级到本地 DLQ（待 replay，不丢） |
+| `mq_producer_dropped_total` | C | type, topic | 真正丢弃（不可 replay） |
+| `mq_dlq_backlog` | G | type, topic | 生产者 DLQ 待补发积压 |
+| `mq_consumer_messages_total` | C | type, topic, result | 消费结果（processed/dedup_skipped/dlq） |
+| `mq_consumer_dlq_backlog` | G | type, topic | 消费者本地 DLQ 存量（毒消息，待人工处理） |
+| `mq_consumer_fetch_errors_total` | C | type, topic | 消费拉取错误 |
+| `mq_consumer_lag` | G | type, topic, partition | 消费 lag（落后 partition 末尾的消息数） |
+| `mq_consumer_offset` | G | type, topic, partition | 已消费 offset |
+
+### 调度 / 链路 / 抢购
+| `scheduler_job_panics_total` | C | job | 调度任务 panic 次数 |
+| `scheduler_job_failures_total` | C | job | 调度任务执行失败次数 |
+| `trace_spans_dropped_total` | C | — | 被丢弃的 trace span（OTLP 背压） |
+| `shop_flash_redeem_total` | C | result | 抢购兑换计数（success/sold_out/user_limit/not_started/ended/timeout/other） |
+| `shop_flash_redeem_timeout_total` | C | — | **10309 超时容量指标**：写事务 deadline 超时回滚累计 |
+| `shop_flash_warmup_total` | C | result | 库存预热/对账（warmed/skipped/error） |
+| `shop_flash_active_activities` | G | — | 进行中抢购活动数 |
+
+### 运行时 / 构建（本次重构新增，见 §6）
+| `go_goroutines` | G | — | 当前 goroutine 数（泄漏观测） |
+| `go_memstats_*` | G | — | 堆/栈/GC 内存统计 |
+| `go_gc_duration_seconds` | H | — | GC 暂停耗时 |
+| `process_cpu_seconds_total` | C | — | 进程累计 CPU 时间 |
+| `process_resident_memory_bytes` | G | — | 常驻内存 |
+| `process_virtual_memory_bytes` | G | — | 虚拟内存 |
+| `process_open_fds` / `process_max_fds` | G | — | 打开文件描述符 / 上限（FD 耗尽观测） |
+| `process_start_time_seconds` | G | — | 进程启动时间（计算运行时长 / 检测重启） |
+| `hc_build_info` | G | version, commit, goversion | 构建信息（值恒为 1，便于按版本分组、检测发版） |
+
+---
+
+## 5. 告警规则
+
+### `rules/flash.yaml` — 定时抢购 10309 容量
+| 告警 | severity | 触发条件 | 含义 |
+|------|----------|----------|------|
+| `FlashSaleRedeemTimeoutSpike` | warning | `rate(shop_flash_redeem_timeout_total[5m])>0` for 2m | 尖峰期出现超时（DB 连接池/行锁饱和信号） |
+| `FlashSaleRedeemTimeoutRatioHigh` | critical | `timeout/total(抢购)>1%` for 5m | 超时占比超阈值，容量严重不足 |
+
+### `rules/app.yaml` — 全栈系统（`hc-framework-system`）
+| 告警 | severity | 触发条件（摘要） |
+|------|----------|------------------|
+| `ServiceDown` | critical | `up{job="hc-framework"}==0` for 1m |
+| `HTTPErrorRateHigh` / `HTTPErrorRateCritical` | warning / critical | 5xx 占比 >5% / >10% for 5m |
+| `HTTPP99LatencyHigh` / `HTTPP99LatencyCritical` | warning / critical | P99 >1s / >3s for 5m |
+| `CircuitBreakerOpen` | critical | `max(circuit_breaker_state)==2` for 1m |
+| `RateLimitRejectionsHigh` | warning | 限流拒绝速率 >10/s for 5m |
+| `LoadSheddingActive` | warning | 并发上限拒绝 >0 for 2m |
+| `MQProducerDLQBacklog` | warning | `sum(mq_dlq_backlog)>0` for 5m |
+| `MQMessagesDropped` | critical | `increase(mq_producer_dropped_total[5m])>0` for 2m |
+| `MQConsumerFetchErrors` | warning | `increase(mq_consumer_fetch_errors_total[5m])>0` for 5m |
+| `MQConsumerLagHigh` | warning | `max(mq_consumer_lag)>10000` for 5m |
+| `CacheL1HitRatioLow` | warning | `cache_l1_hit_ratio<0.5` for 10m（L1 启用时） |
+| `SchedulerJobPanics` | warning | `increase(scheduler_job_panics_total[10m])>0` |
+| `SchedulerJobFailures` | warning | `increase(scheduler_job_failures_total[10m])>0` for 10m |
+| `TraceSpansDropped` | warning | `increase(trace_spans_dropped_total[10m])>0` for 10m |
+| `IdleScanSlow` | warning | 离线扫描 p95 >30s for 10m |
+
+### `rules/app.yaml` — 运行时资源（`hc-framework-runtime`）
+基于自定义 Registry 注册的 `GoCollector` / `ProcessCollector`（`go_*` / `process_*`）。阈值按部署规格（容器内存、并发档）调整；压测高并发档 goroutine 天然偏高，按需放宽。
+| 告警 | severity | 触发条件（摘要） |
+|------|----------|------------------|
+| `GoroutineCountHigh` | warning | `go_goroutines>15000` for 10m |
+| `GoroutineCountCritical` | critical | `go_goroutines>50000` for 10m |
+| `GoHeapInuseHigh` | warning | `go_memstats_heap_inuse_bytes>1.5GiB` for 10m |
+| `GoHeapInuseCritical` | critical | `go_memstats_heap_inuse_bytes>3GiB` for 10m |
+| `ProcessResidentMemoryHigh` | warning | `process_resident_memory_bytes>2GiB` for 15m |
+| `ProcessResidentMemoryCritical` | critical | `process_resident_memory_bytes>4GiB` for 15m |
+| `OpenFileDescriptorsHigh` | warning | `process_open_fds/process_max_fds>0.85` for 5m |
+
+### `rules/app.yaml` — 数据库（本次新增，`hc-framework-db`）
+直接观测「连接池 / 行锁饱和」（抢购 10309 超时根因）。`db` ∈ `{business,user,monitor,log,login_record}`；
+mongodb/clickhouse/elasticsearch 驱动无 `*sql.DB` 自动跳过。
+| 告警 | severity | 触发条件（摘要） |
+|------|----------|------------------|
+| `DBPoolWaitCountRising` | warning | `sum by (db) (increase(db_pool_wait_count_total[5m]))>0` for 2m |
+| `DBPoolUtilizationHigh` | warning | `db_pool_utilization>0.9` for 5m |
+
+### `rules/recording.yaml` — 预计算（降低面板/告警重复计算）
+`http_requests_rate_5m`、`http_requests_5xx_rate_5m`、`http_error_ratio`、`http_p99_latency`、`flash_redeem_rate_by_result`。
+
+### Alertmanager 路由（`alertmanager.yaml`）
+- 默认路由 → `default-webhook` → `host.docker.internal:9095/alerts`。
+- `severity=critical & component=shop-flash` → `flash-capacity-pager` → `host.docker.internal:9095/flash`（更短 group_wait/repeat_interval）。
+- 抑制规则：critical 触发时抑制同 `(alertname,component)` 的 warning。
+- **生产替换**：把两个 webhook URL 换成真实接收端（Slack / PagerDuty / 邮件 / 企业微信）。
+
+---
+
+## 6. 本次监控指标重构说明
+
+在保留全部原指标名（dashboard/告警零改动）的前提下，做了以下安全增强：
+
+1. **补齐运行时指标**（`internal/metrics/metrics.go`）
+   - 在独立 `Registry` 注册 `prometheus.NewGoCollector()` 与 `prometheus.NewProcessCollector()`，
+     新增 `go_goroutines`、`go_memstats_*`、`go_gc_duration_seconds`、`process_cpu_seconds_total`、
+     `process_resident_memory_bytes`、`process_open_fds` 等——此前因自定义 Registry 缺失这些指标，
+     无法观测 goroutine 泄漏、内存增长、FD 耗尽。
+2. **新增 `hc_build_info` 指标**
+   - `hc_build_info{version,commit,goversion}`（值恒为 1），用于按版本分组、检测发版。
+   - 提供 `metrics.SetBuildInfo(version, commit string)`；未注入时 version/commit 默认 `unknown`，goversion 始终可用。
+   - **版本注入已落地**：`cmd/server/main.go` 在启动早期（`bootstrap.Run()` 前）调用 `SetBuildInfo`，版本来自
+     `main.version` / `main.commit` 变量，由构建时 `-ldflags -X main.version=... -X main.commit=...` 注入（见 §3 步骤 2）。
+   - `SetBuildInfo` 内部先 `BuildInfo.Reset()` 再 `Set(1)`，清除 `init` 阶段注册的默认 `unknown` 序列，避免指标里残留陈旧版本标签。验证：`curl :8080/metrics | grep hc_build_info` 应仅出现一个真实版本序列。
+3. **HTTP `path` 标签基数保护**（`internal/middleware/metrics.go`）
+   - 未匹配到路由模板（`c.FullPath()==""`）的请求，原先回退到原始 URL（带路径参数会爆炸基数），
+     现统一归并为 `"unknown"`，仍可由 `status` 维度观测，避免在时序库产生海量高基数序列。
+4. **验证**：重构后 `go build ./cmd/server` 通过；运行时指标与 `hc_build_info` 已通过 Prometheus 抓取确认；
+   告警链路（Prometheus 规则 → Alertmanager 路由 → webhook 接收器 `/alerts`、`/flash`）已端到端验证。
+
+5. **运行时告警组**（`deployments/prometheus/rules/app.yaml` → `hc-framework-runtime`）
+   - 配合新增的 `GoCollector` / `ProcessCollector` 指标，补齐资源盲区告警：
+     goroutine 数量（泄漏/失控）、Go 堆 inuse、进程常驻内存（OOM 前兆）、打开 FD 占比（FD 耗尽前兆）。
+   - 阈值按部署规格调整（压测高并发档 goroutine 天然偏高，已设 `warning 15000` / `critical 50000` 两档，按需放宽）。
+   - 注意 PromQL 模板只能用 `humanize1024` 格式化字节（无 `humanizeBytes`）。
+
+> 未改动任何对外指标名，现有 Grafana 面板与所有告警规则无需调整。
+
+6. **数据库（DB）连接池指标**（本次新增，`internal/metrics/metrics.go` + `internal/bootstrap/bootstrap.go`）
+   - 代码与文档反复强调的头号容量风险是「DB 连接池 / 行锁饱和」（对应抢购 10309 超时），但此前监控里**完全没有**
+     DB 连接池指标，只能靠 `shop_flash_redeem_timeout_total` 间接反推。现在补齐 `db_pool_*` 七项指标
+     （open / in_use / idle / max_open / wait_count / wait_duration / lifetime_closed），标签 `db` 区分库。
+   - 采集方式：新增 `dbPoolCollector`，在 `bootstrap.InitDatabases` 打开各库后调用 `metrics.RegisterDBPool(name, *sql.DB)`
+     注入底层 `*sql.DB`，每次 scrape 实时读取 `db.Stats()`（与 `cacheCollector` 同一模式，无额外轮询）。
+   - 为拿到底层 `*sql.DB`，给 4 个仓储接口（`UserRepository` / `MonitorRepo` / `LogRepo` / `LoginRepo`）加了
+     `SQLDB() (*sql.DB, error)` 访问器；GORM/SQLite 实现返回真实 `*sql.DB`，mongodb / clickhouse / elasticsearch
+     实现返回 error（监控自动跳过，不产生该 db 序列）。未改动任何既有方法语义。
+   - 配套新增 `hc-framework-db` 告警组（等待计数突增、利用率 >90%）与 recording 规则 `db_pool_utilization`，
+     直接指向「连接池饱和 → 10309」的因果链。
+
+---
+
+## 7. 排错
+
+- **Target `hc-framework` down**：确认应用已在 `:8080` 运行（`curl :8080/metrics`）；
+  若在宿主机跑，Prometheus 通过 `host.docker.internal:8080` 访问（compose 已配 host-gateway）。
+  改了 `prometheus.yaml` 后执行 `curl -XPOST http://127.0.0.1:9090/-/reload` 或
+  `docker-compose -f docker-compose.monitoring.yml up -d --force-recreate prometheus` 重新加载。
+- **Grafana 面板无数据**：确认 Prometheus 数据源 `DS_PROMETHEUS` 为默认；指标名与 §4 一致。
+- **告警不发送**：检查 Alertmanager 容器能解析 `host.docker.internal`（`docker-compose.monitoring.yml`
+  已给 alertmanager 加 `extra_hosts`）；确认 webhook 接收器在 `:9095` 运行；看 `/tmp/alertmanager_webhook.log`。
+- **端口冲突**：9090/9093/3000 被占用时，改 `docker-compose.monitoring.yml` 的宿主机映射端口。

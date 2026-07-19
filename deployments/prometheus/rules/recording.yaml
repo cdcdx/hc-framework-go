@@ -1,0 +1,27 @@
+# deployments/prometheus/rules/recording.yaml
+#
+# 预计算常用查询，降低 Grafana 面板与告警规则的重复计算成本。
+# 注意：recording rule 的 metric 名会成为一等指标，可被 Grafana / 其余告警直接引用。
+groups:
+  - name: hc-framework-recording
+    interval: 30s
+    rules:
+      - record: http_requests_rate_5m
+        expr: sum(rate(http_requests_total[5m]))
+      - record: http_requests_5xx_rate_5m
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m]))
+      - record: http_error_ratio
+        expr: |
+          http_requests_5xx_rate_5m
+            / clamp_min(http_requests_rate_5m, 1e-9)
+      - record: http_p99_latency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+      - record: flash_redeem_rate_by_result
+        expr: sum by (result) (rate(shop_flash_redeem_total[5m]))
+      # DB 连接池利用率（in_use / max_open），用于面板与告警；max_open=0（unlimited/sqlite）时为 NaN。
+      - record: db_pool_utilization
+        expr: |
+          db_pool_in_use_connections
+            / clamp_min(db_pool_max_open_connections, 1)

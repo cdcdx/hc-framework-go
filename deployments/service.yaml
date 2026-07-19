@@ -1,0 +1,19 @@
+# 普通 ClusterIP Service：对外访问入口（端口 80 → Pod 8080），负载均衡到所有就绪 Pod。
+# 注意：StatefulSet 所需的 Headless Service（clusterIP: None）定义在 statefulset.yaml 末尾，
+# 名为 hc-framework-headless，与本文件同名不同名，避免 apply 冲突。
+apiVersion: v1
+kind: Service
+metadata:
+  name: hc-framework
+  namespace: default
+  labels:
+    app: hc-framework
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: hc-framework

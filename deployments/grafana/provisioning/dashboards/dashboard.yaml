@@ -1,0 +1,16 @@
+# Grafana 仪表盘 provisioning：自动导入 hc-framework 监控面板
+#
+# 挂载目录 /var/lib/grafana/dashboards 下的 JSON 会被自动加载；
+# hc-framework-dashboard.json 含 shop_flash_redeem_timeout_total 超时面板（id=16）。
+apiVersion: 1
+providers:
+  - name: hc-framework
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      # 文件更新后自动重载（Grafana 会监听目录变化）
+      allowUiUpdates: true

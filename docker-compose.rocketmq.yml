@@ -1,0 +1,95 @@
+# ============================================================
+# RocketMQ 本地开发（namesrv + broker + dashboard）
+# 4.9.x 与 rocketmq-client-go v2.1.2 remoting 协议兼容
+# ------------------------------------------------------------
+# 使用：
+#   docker compose -f docker-compose.rocketmq.yml up -d
+#   docker compose -f docker-compose.rocketmq.yml down          # 保留数据卷
+#   docker compose -f docker-compose.rocketmq.yml down -v       # 连同数据卷一起清除
+#
+# 端口 / 可视化：
+#   - namesrv     127.0.0.1:9876   （mq.rocketmq.endpoints）
+#   - broker      127.0.0.1:10911  （客户端实际收发连这个）
+#   - dashboard   http://127.0.0.1:8082 （topic / 消费组 / 消息查询）
+#   - 切换 config.yaml 的 mq.type: "rocketmq" 即可启用
+#
+# 关键点（踩坑）：
+#   - config.yaml 中 mq.rocketmq.endpoints = ["127.0.0.1:9876"]，宿主机经端口映射访问 namesrv。
+#   - broker 必须显式声明 brokerIP1=127.0.0.1（-b 参数），否则它向 namesrv 注册的是容器内部 IP，
+#     宿主机上的 Go 客户端拿到该内网地址后连不上 broker（route info found 但连接超时）。
+#   - autoCreateTopicEnable=true：config.yaml 中 mq.rocketmq.broker_addr 留空，
+#     生产者靠「探测消息」触发 broker 自动建 topic，必须开启。
+#   - dashboard 在 compose 网络内经 namesrv:9876 访问 namesrv（不走 127.0.0.1）。
+# ============================================================
+services:
+  namesrv:
+    image: apache/rocketmq:4.9.7
+    container_name: hc-rocketmq-namesrv
+    ports:
+      - "9876:9876"
+    command: ["sh", "mqnamesrv"]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "(echo > /dev/tcp/127.0.0.1/9876) || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - hc-rocketmq-net
+
+  broker:
+    image: apache/rocketmq:4.9.7
+    container_name: hc-rocketmq-broker
+    depends_on:
+      namesrv:
+        condition: service_healthy
+    ports:
+      - "10909:10909"   # VIP channel
+      - "10911:10911"   # listen port（客户端实际连这个）
+      - "10912:10912"   # HA port
+    environment:
+      # 限制堆内存，避免本地 OOM（默认 8g 起不来）
+      JAVA_OPT_EXT: "-Xmx512m -Xms512m -Xmn256m"
+    command:
+      - "sh"
+      - "mqbroker"
+      - "-n"
+      - "namesrv:9876"
+      - "-b"
+      - "127.0.0.1:10911"
+      - "autoCreateTopicEnable=true"
+    volumes:
+      - hc-rocketmq-store:/home/rocketmq/store
+      - hc-rocketmq-logs:/home/rocketmq/logs
+    healthcheck:
+      test: ["CMD", "sh", "-c", "(echo > /dev/tcp/127.0.0.1/10911) || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+    networks:
+      - hc-rocketmq-net
+
+  # rocketmq-dashboard：官方可视化管理（topic / 消费组 / 消息查询 / broker 状态）
+  dashboard:
+    image: apacherocketmq/rocketmq-dashboard:latest
+    container_name: hc-rocketmq-dashboard
+    depends_on:
+      namesrv:
+        condition: service_healthy
+    ports:
+      - "8082:8080"   # 宿主机 8082 -> 容器 8080（避开 Go 应用 8080 / kafka-map 8081）
+    environment:
+      # 容器网络内经服务名访问 namesrv（不能用 127.0.0.1，那指向 dashboard 自身）
+      - JAVA_OPTS=-Drocketmq.namesrv.addr=namesrv:9876 -Dcom.rocketmq.sendMessageWithVIPChannel=false
+    restart: unless-stopped
+    networks:
+      - hc-rocketmq-net
+
+volumes:
+  hc-rocketmq-store:
+  hc-rocketmq-logs:
+
+networks:
+  hc-rocketmq-net:
+    name: hc-rocketmq-net

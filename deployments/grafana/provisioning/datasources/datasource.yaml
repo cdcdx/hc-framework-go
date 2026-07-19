@@ -1,0 +1,24 @@
+# Grafana 数据源 provisioning：自动接入同网络内的 Prometheus
+#
+# 关键点：
+#   - uid 设为 DS_PROMETHEUS，与 hc-framework-dashboard.json 中 ${DS_PROMETHEUS} 变量对齐；
+#   - isDefault: true，使面板里 current 为空的 datasource 变量自动解析到本数据源。
+#   - url 用 compose 网络内的服务名 prometheus:9090（不是宿主机 127.0.0.1）。
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: DS_PROMETHEUS
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+
+  # Alertmanager 数据源：供仪表盘「当前告警」面板（alertlist）使用
+  - name: Alertmanager
+    type: alertmanager
+    uid: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    isDefault: false
+    editable: true

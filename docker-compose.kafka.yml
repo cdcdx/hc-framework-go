@@ -1,0 +1,117 @@
+# ============================================================
+# Kafka 本地开发备选（ZooKeeper 模式，Kafka 3.5）+ kafka-map 可视化
+# ------------------------------------------------------------
+# 重要说明：本项目当前默认运行环境为 Kafka 4.0 KRaft（如本机
+# bitnamilegacy/kafka:4.0.0）。由于 kafka-go v0.4.51 的 group coordinator 协议
+# 与 KRaft 4.0 不兼容（带 GroupID 时 FetchMessage 返回 UNKNOWN_SERVER_ERROR(-1)，
+# 详见 docs/13_代码优化记录.md §6.5），消费者已显式声明为「无消费组 + 按分区直读」
+# （mq.kafka.consumer.mode: "direct"，见 §6.5 / §3.60「配置收敛」）。-1 Unknown 已由
+# 该直读模式在应用层规避，本 compose 文件【不再是】消除 -1 Unknown 的必要手段。
+#
+# 本文件保留为「可选回退」：
+#   - 若你的开发环境没有 4.0 KRaft、或想用 ZK 模式验证消费组行为，可用它起 3.5 ZK。
+#   - 无消费组（mode: direct）的消费者在 ZK 模式 broker 上同样可用（不经过 coordinator）。
+#   - 注意：若在本 ZK 模式下把 mq.kafka.consumer.mode 误配为 "group"，应用启动会直接报错
+#     （kafka-go v0.4.51 的 group coordinator 在任意 broker 版本下仍走 coordinator 握手），
+#     需改回 "direct" 或待 P0 升级 kafka-go 后再用消费组。
+#
+# 注意：本文件镜像版本（3.5 ZK）与「项目 K8s 的 3.7 KRaft」、与本机 4.0 KRaft
+# 均不一致；它只是本地快捷备选，不代表生产部署形态。
+#
+# 双 listener 说明（关键）：
+#   - EXTERNAL://127.0.0.1:9092 —— 供宿主机上的 Go 应用连接（mq.kafka.brokers）。
+#   - INTERNAL://kafka:9093     —— 供同一 compose 网络内的其它容器（kafka-map）连接。
+#   若只保留单 listener 广播 127.0.0.1:9092，则容器内的 kafka-map 会拿到 127.0.0.1
+#   （指向 kafka-map 自身容器）而连不上 broker，故必须拆分内外 listener。
+#
+# 使用：
+#   docker compose -f docker-compose.kafka.yml up -d
+#   docker compose -f docker-compose.kafka.yml down          # 保留数据卷
+#   docker compose -f docker-compose.kafka.yml down -v       # 连同数据卷一起清除
+#
+# 可视化：
+#   - kafka-map 管理界面 http://127.0.0.1:8081 （用户 admin / admin）
+#   - 首次登录后「新增集群」，broker 地址填 kafka:9093（容器网络内地址）。
+# ============================================================
+services:
+  zookeeper:
+    image: bitnami/zookeeper:3.9
+    container_name: hc-zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    volumes:
+      - hc-zookeeper-data:/bitnami/zookeeper
+    healthcheck:
+      test: ["CMD", "zkServer.sh", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - hc-kafka-net
+
+  kafka:
+    image: bitnami/kafka:3.5
+    container_name: hc-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"   # EXTERNAL：宿主机 Go 应用连接
+    environment:
+      # ZK 模式（不设 PROCESS_ROLES 即为 ZK 模式）
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      # 双 listener：EXTERNAL 给宿主机，INTERNAL 给 compose 网络内的容器（kafka-map）
+      - KAFKA_CFG_LISTENERS=EXTERNAL://:9092,INTERNAL://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=EXTERNAL://127.0.0.1:9092,INTERNAL://kafka:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=INTERNAL
+      # 兜底：生产 / 消费时自动建 topic
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      # 单 broker 本地开发：分区 / 副本按本地规模设置
+      - KAFKA_CFG_NUM_PARTITIONS=12
+      - KAFKA_CFG_DEFAULT_REPLICATION_FACTOR=1
+      - KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_CFG_MIN_INSYNC_REPLICAS=1
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    volumes:
+      - hc-kafka-data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - hc-kafka-net
+
+  # kafka-map：轻量级 Kafka 可视化管理（topic / 分区 / 消费组 / 消息浏览）
+  kafka-map:
+    image: dushixiang/kafka-map:latest
+    container_name: hc-kafka-map
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8080"   # 宿主机 8081 -> 容器 8080（避开 Go 应用的 8080）
+    environment:
+      - DEFAULT_USERNAME=admin
+      - DEFAULT_PASSWORD=admin
+    volumes:
+      - hc-kafka-map-data:/usr/local/kafka-map/data
+    restart: unless-stopped
+    networks:
+      - hc-kafka-net
+
+volumes:
+  hc-zookeeper-data:
+  hc-kafka-data:
+  hc-kafka-map-data:
+
+networks:
+  hc-kafka-net:
+    name: hc-kafka-net

@@ -1,0 +1,166 @@
+# ============================================================
+# StatefulSet 部署示例：离线检测扫描分片 + 选主
+# ------------------------------------------------------------
+# 与 Deployment 的区别：StatefulSet 的 Pod 拥有稳定序号与主机名
+# （hc-framework-0 / -1 / -2 ...），可用于向进程注入
+# HC_POD_INDEX，使每个 Pod 只扫描/消费属于自己的活跃集合分片
+# （i % pod_total == pod_index），将“每副本全量扫描”的 O(K×N) 冗余
+# 线性分摊到各 Pod。
+#
+# 启用步骤：
+#   1. 本清单注入 HC_POD_INDEX（来自 Pod ordinal）与 HC_POD_TOTAL（= replicas）。
+#   2. ConfigMap 中设置 APP_IDLE_SCAN_SHARDING_ENABLED=true（见 configmap.yaml）。
+#      （HC_POD_INDEX/HC_POD_TOTAL 由本清单注入，无需写进配置文件。）
+#   3. 可选：设置 APP_IDLE_LEADER_ELECTION_ENABLED=true，仅 Leader 执行单例任务。
+#
+# 注意（扩缩容）：HC_POD_TOTAL 为静态字面量，需与 replicas 保持一致。
+# 若用 HPA 自动扩缩，推荐改用 Headless Service 动态发现（见下方 pod_discovery=headless 段落），
+# 由进程周期性 DNS 解析就绪副本数自动感知 pod_total，无需手改配置；缩容缺口由死分片接管（failover）兜底。
+#
+# === 方式二：Headless Service 动态发现（推荐用于 HPA 自动扩缩，configmap 默认即此模式）===
+# 1) 无需改动下方 env：headless 模式下进程以 DNS 发现的就绪副本数作为 pod_total，自动忽略 HC_POD_TOTAL 静态值
+#    （避免 HPA 扩缩后被静态值覆盖）；HC_POD_INDEX 仍由 POD_NAME ordinal 注入。若切回 env 模式，才需令
+#    HC_POD_TOTAL 与 replicas 一致。
+# 2) ConfigMap 中设置：
+#      APP_IDLE_SCAN_SHARDING_ENABLED=true
+#      APP_IDLE_SCAN_SHARDING_POD_DISCOVERY=headless
+#      APP_IDLE_SCAN_SHARDING_HEADLESS_SERVICE=hc-framework-headless   # 须与本清单末尾 Headless Service 同名
+#      APP_IDLE_SCAN_SHARDING_FAILOVER=true
+#      APP_IDLE_LEADER_ELECTION_ENABLED=true
+# 3) 本清单已定义同名 Headless Service（clusterIP: None，名为 hc-framework-headless），
+#    pod 名形如 hc-framework-2，
+#    进程会从 POD_NAME 提取 ordinal 作 pod_index，并从 DNS 解析副本数作 pod_total。
+# 扩容：新 Pod 经 DNS 自行发现更大 pod_total；缩容：被删 Pod 的分片由 failover 接管。
+# ============================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hc-framework
+  namespace: default
+  labels:
+    app: hc-framework
+    version: v1
+spec:
+  serviceName: hc-framework-headless   # 必须指向文件末尾的 Headless Service（StatefulSet 稳定网络标识前提）
+  replicas: 3                      # 与下方 HC_POD_TOTAL 保持一致
+  podManagementPolicy: Parallel    # 并行启动，缩短滚动发布时间
+  selector:
+    matchLabels:
+      app: hc-framework
+  template:
+    metadata:
+      labels:
+        app: hc-framework
+        version: v1
+    spec:
+      terminationGracePeriodSeconds: 30
+      serviceAccountName: hc-framework
+      containers:
+        - name: app
+          image: hc-framework:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: hc-framework-config
+            - secretRef:
+                name: hc-framework-secret
+          env:
+            # POD_NAME 由 Downward API 注入，形如 hc-framework-2
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # POD_NAMESPACE 供 Headless Service DNS 发现拼 FQDN（<svc>.<ns>.svc.cluster.local）；缺省回退 default。
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # HC_POD_TOTAL 应等于 replicas；headless 模式下被忽略（以 DNS 发现的副本数为准），env 模式需与其一致。
+            - name: HC_POD_TOTAL
+              value: "3"
+          # 用 shell 从 POD_NAME 末尾提取序号（StatefulSet ordinal）注入 HC_POD_INDEX，
+          # 再启动服务。${POD_NAME##*-} 去除最后一段前的所有内容，得到 "2"。
+          command: ["/bin/sh", "-c"]
+          args:
+            - >
+              export HC_POD_INDEX=${POD_NAME##*-} &&
+              echo "starting pod index=${HC_POD_INDEX} total=${HC_POD_TOTAL}" &&
+              exec /app/hcf-server -config config/config.yaml
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 10
+            initialDelaySeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            periodSeconds: 5
+            initialDelaySeconds: 5
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: hc-framework
+                topologyKey: kubernetes.io/hostname
+---
+# Headless Service：供 StatefulSet Pod 间稳定网络标识（<pod>.hc-framework-headless.default.svc.cluster.local）
+# 与（可选）动态发现副本数。注意与普通 ClusterIP Service（service.yaml 中的 hc-framework）区分，
+# 两者命名空间相同但名字不同，避免 apply 冲突；selector 一致，均匹配 app=hc-framework。
+apiVersion: v1
+kind: Service
+metadata:
+  name: hc-framework-headless
+  namespace: default
+  labels:
+    app: hc-framework
+spec:
+  clusterIP: None
+  selector:
+    app: hc-framework
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

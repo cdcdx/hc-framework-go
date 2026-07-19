@@ -1,0 +1,79 @@
+# ============================================
+# .gitignore
+# ============================================
+
+# 编译产物
+/bin/
+/dist/
+/build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+__debug_bin*
+
+# 测试覆盖率
+coverage.html
+coverage.out
+*.out
+*.test
+*.prof
+
+# 依赖
+vendor/
+
+# 数据文件
+backup/
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# 日志
+logs/
+*.log
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 环境变量
+.env
+.env.local
+.env.production
+.env.*
+
+# 死信队列本地持久化
+dlq/
+
+# Swagger 文档生成目录（由 `make generate` / `swag init` 生成，纯产物、非编译依赖，保持忽略）
+swagger/
+!docs/.gitkeep
+
+# K8s Secret（生产环境的实际密钥文件）
+deployments/secret-prod.yaml
+
+# 本地配置覆盖（含真实密钥，请勿提交；由 config/config.yaml 复制后填写）
+config/config.yaml
+
+# 密钥文件
+*.pem
+*.key
+*.p12
+*.pfx
+server
+
+# 本地真实配置副本/备份（含密钥，切勿提交）
+.backup/
+config/config copy.yaml
+config/config.stress.yaml

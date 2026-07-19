@@ -1,0 +1,46 @@
+# ============================================================
+# RabbitMQ 本地开发（AMQP + 内置管理界面）
+# ------------------------------------------------------------
+# config.yaml 中 mq.rabbitmq.url = "amqp://rabbitmq:rabbitmq@127.0.0.1:5672/"
+# （显式建专用用户 rabbitmq/rabbitmq 并授权，规避 guest 禁止非 loopback 连接的 403）。
+#
+# 使用：
+#   docker compose -f docker-compose.rabbitmq.yml up -d
+#   docker compose -f docker-compose.rabbitmq.yml down          # 保留数据卷
+#   docker compose -f docker-compose.rabbitmq.yml down -v       # 连同数据卷一起清除
+#
+# 端口 / 可视化：
+#   - AMQP        127.0.0.1:5672   （Go 客户端连这个，mq.rabbitmq.url）
+#   - 管理界面    http://127.0.0.1:15672 （用户 rabbitmq / rabbitmq）
+#   - 切换 config.yaml 的 mq.type: "rabbitmq" 即可启用
+# ============================================================
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: hc-rabbitmq
+    hostname: hc-rabbitmq          # 固定 hostname，避免容器重建后 mnesia 数据目录变化导致丢数据
+    ports:
+      - "5672:5672"     # AMQP（Go 客户端连这个）
+      - "15672:15672"   # 管理界面（内置可视化）
+    environment:
+      RABBITMQ_DEFAULT_USER: "rabbitmq"
+      RABBITMQ_DEFAULT_PASS: "rabbitmq"
+      # 单实例开发：内存高水位设为 80%，避免压测时过早触发流控
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit vm_memory_high_watermark 0.8"
+    volumes:
+      - hc-rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+    networks:
+      - hc-rabbitmq-net
+
+volumes:
+  hc-rabbitmq-data:
+
+networks:
+  hc-rabbitmq-net:
+    name: hc-rabbitmq-net

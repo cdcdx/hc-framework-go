@@ -1,0 +1,98 @@
+# ============================================================
+# MongoDB · 副本集（1 主 2 从，共 3 节点）
+# ------------------------------------------------------------
+# 对应 8.4.4 / 8.3：用户数据；跨机反亲和；init Job 一次性 rs.initiate。
+# 应用 DSN：mongodb://<user>@mongodb-0.mongodb:27017,hongodb-1...,hc_users
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  labels:
+    app: mongodb
+spec:
+  clusterIP: None
+  ports:
+    - name: mongo
+      port: 27017
+      targetPort: 27017
+  selector:
+    app: mongodb
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+spec:
+  serviceName: mongodb
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: mongodb
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: mongodb
+          image: mongo:7.0
+          command: ["mongod"]
+          args:
+            - "--replSet"
+            - "rs0"
+            - "--bind_ip_all"
+          ports:
+            - containerPort: 27017
+              name: mongo
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: nvme-sc
+        resources:
+          requests:
+            storage: 50Gi
+---
+# 一次性初始化副本集
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongodb-init
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: mongo:7.0
+          command:
+            - bash
+            - -c
+            - >
+              until mongosh --host mongodb-0.mongodb:27017 --eval "db.runCommand({ping:1})" >/dev/null 2>&1; do sleep 3; done;
+              mongosh --host mongodb-0.mongodb:27017 --eval
+              "rs.initiate({_id:'rs0',members:[
+                {_id:0,host:'mongodb-0.mongodb:27017'},
+                {_id:1,host:'mongodb-1.mongodb:27017'},
+                {_id:2,host:'mongodb-2.mongodb:27017'}]})"

@@ -1,0 +1,40 @@
+# deployments/prometheus/prometheus.yaml
+#
+# 最小可用 Prometheus 配置：抓取 hc-framework-go 服务的 /metrics，
+# 载入定时抢购容量告警规则，并把告警发给 Alertmanager。
+#
+# 配套文件：
+#   - rules/flash.yaml          （10309 超时容量告警规则）
+#   - alertmanager.yaml         （Alertmanager 路由/接收方）
+#
+# 部署提示（k8s 示例）：
+#   scrape_configs 中的 targets 用 Service 名（如 hc-framework:8080）替换 localhost；
+#   用 ConfigMap 挂载本文件 + rules/ 目录，容器参数 --config.file=/etc/prometheus/prometheus.yaml。
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+rule_files:
+  - /etc/prometheus/rules/*.yaml        # 挂载 deployments/prometheus/rules（含 flash.yaml）
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093          # 替换为实际 Alertmanager 地址
+
+scrape_configs:
+  # hc-framework-go 业务服务：/metrics 暴露（含 shop_flash_redeem_total / shop_flash_redeem_timeout_total）
+  #
+  # 抓取目标按部署形态替换：
+  #   - Docker 开发（Go 应用跑在宿主机）：host.docker.internal:8080
+  #     （compose 已用 host-gateway 把 host.docker.internal 映射到宿主机，见 docker-compose.monitoring.yml）
+  #   - K8s / 容器同网络：Service 名（如 hc-framework:8080）
+  - job_name: "hc-framework"
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - host.docker.internal:8080
+        labels:
+          env: "stress"
