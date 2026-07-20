@@ -99,7 +99,7 @@ make k6-test-shop-flash FLASH_ACTIVITY_ID=7
 
 前置：商品 `FLASH_ITEM_ID`（默认复用 `ITEM_ID=1`）需 `is_active=1`、`stock>=LIMIT_QTY`；`config.admin.token` 需配置（方式一）。
 
-验收指标见 `docs/02_需求规格说明书.md` §9.5 与 `docs/21_定时抢购高并发方案.md`。
+验收指标见 [002_需求规格说明书.md](docs/002_需求规格说明书.md) §9.5 与 [302_定时抢购高并发方案.md](docs/302_定时抢购高并发方案.md)。
 
 ### loadtest-heartbeat/ — 百万设备心跳压测（Go）
 
@@ -133,6 +133,6 @@ go run ./scripts/loadtest-settle \
 
 ## 相关文档
 
-- 数据库迁移机制：[06_数据库迁移.md](docs/06_数据库迁移.md)
-- 部署与压测指标：[07_集群设备部署手册.md](docs/07_集群设备部署手册.md) §12
-- 验收标准：[02_需求规格说明书.md](docs/02_需求规格说明书.md) §9.5
+- 数据库迁移机制：[203_数据库迁移.md](docs/203_数据库迁移.md)
+- 部署与压测指标：[401_集群设备部署手册.md](docs/401_集群设备部署手册.md) §12
+- 验收标准：[002_需求规格说明书.md](docs/002_需求规格说明书.md) §9.5

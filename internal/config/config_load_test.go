@@ -22,7 +22,7 @@ func TestLoadShippedConfig(t *testing.T) {
 		t.Fatal("server.mode must not be empty")
 	}
 
-	// 与 docs/05_配置参考.md 对齐的关键新增字段（此前缺失、已补文档）：
+	// 与 docs/202_配置参考.md 对齐的关键新增字段（此前缺失、已补文档）：
 	if cfg.Server.ReadHeaderTimeout <= 0 {
 		t.Fatalf("server.read_header_timeout = %v, want > 0", cfg.Server.ReadHeaderTimeout)
 	}
