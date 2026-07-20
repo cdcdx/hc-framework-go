@@ -100,7 +100,7 @@ func TestOpenGORMOrFallback_FallsBackToSQLite(t *testing.T) {
 	cfg := &config.Config{} // Migration.AutoMigrate 默认 false
 
 	got, err := openGORMOrFallback("u", "mysql", ":::invalid-dsn:::", fallback,
-		[]interface{}{&model.User{}}, cfg, db.PoolConfig{})
+		[]interface{}{&model.User{}}, cfg, db.PoolConfig{}, db.PoolConfig{})
 	if err != nil {
 		t.Fatalf("fallback open failed: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestOpenGORMOrFallback_SQLitePrimaryFailsNoFallback(t *testing.T) {
 	cfg := &config.Config{}
 	// /etc/hosts 是普通文件，其子目录不可创建 → 主库打开必失败
 	_, err := openGORMOrFallback("u", "sqlite", "file:/etc/hosts/x/test.db",
-		"file:/tmp/should-not-be-used.db", []interface{}{&model.User{}}, cfg, db.PoolConfig{})
+		"file:/tmp/should-not-be-used.db", []interface{}{&model.User{}}, cfg, db.PoolConfig{}, db.PoolConfig{})
 	if err == nil {
 		t.Fatal("expected error for unreachable sqlite path (no fallback for sqlite)")
 	}
@@ -354,6 +354,9 @@ func (c *closeCountRepo) FindByType(context.Context, string, time.Time, time.Tim
 func (c *closeCountRepo) CountByType(context.Context, string, time.Time, time.Time) (int64, error) {
 	return 0, nil
 }
+func (c *closeCountRepo) CountByTypeAndResult(context.Context, string, string, time.Time, time.Time) (int64, error) {
+	return 0, nil
+}
 func (c *closeCountRepo) Close() error            { c.closeCalls++; return nil }
 func (c *closeCountRepo) SQLDB() (*sql.DB, error) { return nil, nil }
 
@@ -376,26 +379,18 @@ func (c *closeCountMonitor) FindByTimeRange(context.Context, time.Time, time.Tim
 func (c *closeCountMonitor) Close() error            { c.closeCalls++; return nil }
 func (c *closeCountMonitor) SQLDB() (*sql.DB, error) { return nil, nil }
 
-type closeCountLogin struct{ closeCalls int }
-
-func (c *closeCountLogin) Create(context.Context, *model.LoginRecord) error        { return nil }
-func (c *closeCountLogin) CreateBatch(context.Context, []*model.LoginRecord) error { return nil }
-func (c *closeCountLogin) Close() error                                            { c.closeCalls++; return nil }
-func (c *closeCountLogin) SQLDB() (*sql.DB, error)                                 { return nil, nil }
-
-// TestDatabases_Close：Databases.Close 释放 monitor/log/login 三类连接，
+// TestDatabases_Close：Databases.Close 释放 monitor/log 两类连接，
 // 且 BusinessRW/UserRepo 为 nil 时不 panic（向后兼容）。
 func TestDatabases_Close(t *testing.T) {
 	mon := &closeCountMonitor{}
 	log := &closeCountRepo{}
-	login := &closeCountLogin{}
-	dbs := &Databases{MonitorRepo: mon, LogRepo: log, LoginRepo: login}
+	dbs := &Databases{MonitorRepo: mon, LogRepo: log}
 	if err := dbs.Close(); err != nil {
 		t.Fatalf("Databases.Close returned error: %v", err)
 	}
-	if mon.closeCalls != 1 || log.closeCalls != 1 || login.closeCalls != 1 {
-		t.Errorf("expected each repo Close called once, got monitor=%d log=%d login=%d",
-			mon.closeCalls, log.closeCalls, login.closeCalls)
+	if mon.closeCalls != 1 || log.closeCalls != 1 {
+		t.Errorf("expected each repo Close called once, got monitor=%d log=%d",
+			mon.closeCalls, log.closeCalls)
 	}
 }
 
@@ -404,13 +399,12 @@ func TestDatabases_Close(t *testing.T) {
 func TestDatabases_Close_AggregatesErrors(t *testing.T) {
 	mon := &closeCountMonitor{}
 	fail := &errLogRepo{}
-	login := &closeCountLogin{}
-	dbs := &Databases{MonitorRepo: mon, LogRepo: fail, LoginRepo: login}
+	dbs := &Databases{MonitorRepo: mon, LogRepo: fail}
 	if err := dbs.Close(); err == nil {
 		t.Fatal("expected aggregated error when a repo Close fails")
 	}
-	if mon.closeCalls != 1 || login.closeCalls != 1 {
-		t.Errorf("other repos should still close, got monitor=%d login=%d", mon.closeCalls, login.closeCalls)
+	if mon.closeCalls != 1 {
+		t.Errorf("other repos should still close, got monitor=%d", mon.closeCalls)
 	}
 }
 

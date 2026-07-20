@@ -108,7 +108,7 @@ func TestDecodePayload_ErrorPreserved(t *testing.T) {
 	if err == nil {
 		t.Fatal("chan payload: want error, got nil")
 	}
-	var jsonErr *jsonMarshalError
+	var jsonErr jsonMarshalError
 	if !errors.As(err, &jsonErr) {
 		t.Logf("error type: %T, value: %v", err, err)
 		// 注意：json.Marshal 返回的是 json.UnsupportedTypeError，不是我们自己的类型

@@ -38,6 +38,9 @@ func NewTaskRepositoryFromTx(tx *gorm.DB) *TaskRepository {
 
 // FindAll 获取所有活跃任务（读从库 → 三级缓存）
 func (r *TaskRepository) FindAll(ctx context.Context) ([]model.Task, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("task repo: rw not initialized")
+	}
 	const cacheKey = "task:all"
 	const ttl = 60 * time.Second
 
@@ -62,6 +65,9 @@ func (r *TaskRepository) FindAll(ctx context.Context) ([]model.Task, error) {
 
 // FindByID 根据 ID 获取任务（读从库 → 三级缓存）
 func (r *TaskRepository) FindByID(ctx context.Context, id int64) (*model.Task, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("task repo: rw not initialized")
+	}
 	cacheKey := fmt.Sprintf("task:%d", id)
 	const ttl = 120 * time.Second
 
@@ -99,6 +105,9 @@ func (r *TaskRepository) FindByID(ctx context.Context, id int64) (*model.Task, e
 
 // FindProgress 获取用户某个任务在指定周期的进度（读从库）
 func (r *TaskRepository) FindProgress(ctx context.Context, userID string, taskID int64, period string) (*model.UserTaskProgress, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("task repo: rw not initialized")
+	}
 	var progress model.UserTaskProgress
 	err := r.rw.Read(ctx).
 		Where("user_id = ? AND task_id = ? AND period = ?", userID, taskID, period).
@@ -114,6 +123,9 @@ func (r *TaskRepository) FindProgress(ctx context.Context, userID string, taskID
 
 // FindUserProgress 获取用户所有任务进度（读从库）
 func (r *TaskRepository) FindUserProgress(ctx context.Context, userID, period string) ([]model.UserTaskProgress, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("task repo: rw not initialized")
+	}
 	var progresses []model.UserTaskProgress
 	err := r.rw.Read(ctx).
 		Where("user_id = ? AND period = ?", userID, period).
@@ -124,6 +136,9 @@ func (r *TaskRepository) FindUserProgress(ctx context.Context, userID, period st
 // UpsertProgress 创建或更新任务进度（原子 upsert，消除 TOCTOU 先读后写竞态）。
 // 利用 uniqueIndex idx_user_task_period (user_id, task_id, period) 实现 ON CONFLICT 更新。
 func (r *TaskRepository) UpsertProgress(ctx context.Context, progress *model.UserTaskProgress) error {
+	if r.rw == nil {
+		return fmt.Errorf("task repo: rw not initialized")
+	}
 	return r.rw.Write(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "user_id"}, {Name: "task_id"}, {Name: "period"}},
 		DoUpdates: clause.AssignmentColumns([]string{"current_progress", "is_completed", "is_claimed", "completed_at", "updated_at"}),
@@ -132,6 +147,9 @@ func (r *TaskRepository) UpsertProgress(ctx context.Context, progress *model.Use
 
 // FindByKeys 按 TaskKey 批量获取活跃任务（读从库）。事件驱动进度更新用。
 func (r *TaskRepository) FindByKeys(ctx context.Context, keys []string) ([]model.Task, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("task repo: rw not initialized")
+	}
 	if len(keys) == 0 {
 		return nil, nil
 	}
@@ -159,6 +177,9 @@ func isDeadlock(err error) bool {
 //   - 高并发下第一步 INSERT...ON DUPLICATE KEY UPDATE 可能死锁(1213)；整段加重试
 //     （最多 3 次、指数退避），两步均幂等（单调累加 / DoNothing），重试安全。
 func (r *TaskRepository) IncrProgress(ctx context.Context, userID string, task *model.Task, period string, delta int) error {
+	if r.rw == nil {
+		return fmt.Errorf("task repo: rw not initialized")
+	}
 	if delta <= 0 {
 		return nil
 	}
@@ -185,6 +206,9 @@ func (r *TaskRepository) IncrProgress(ctx context.Context, userID string, task *
 
 // incrProgressOnce 单次执行（见 IncrProgress 的重试封装）。两步均幂等，可被安全重试。
 func (r *TaskRepository) incrProgressOnce(ctx context.Context, userID string, task *model.Task, period string, delta int) error {
+	if r.rw == nil {
+		return fmt.Errorf("task repo: rw not initialized")
+	}
 	// 第一步：确保行存在（幂等插入，利用 uniqueIndex idx_user_task_period 去重）。
 	// 注意：须捕获此处错误——死锁(1213)会在本步抛出，原实现忽略该错误会导致进度行未创建而丢失进度。
 	if err := r.rw.Write(ctx).Clauses(clause.OnConflict{
@@ -214,6 +238,9 @@ func (r *TaskRepository) incrProgressOnce(ctx context.Context, userID string, ta
 
 // ClaimReward 领取任务奖励（写主库）
 func (r *TaskRepository) ClaimReward(ctx context.Context, userID string, taskID int64, period string) error {
+	if r.rw == nil {
+		return fmt.Errorf("task repo: rw not initialized")
+	}
 	result := r.rw.Write(ctx).Model(&model.UserTaskProgress{}).
 		Where("user_id = ? AND task_id = ? AND period = ? AND is_completed = ? AND is_claimed = ?",
 			userID, taskID, period, true, false).
@@ -229,6 +256,9 @@ func (r *TaskRepository) ClaimReward(ctx context.Context, userID string, taskID 
 
 // SeedTasks 初始化默认任务数据（写主库）
 func (r *TaskRepository) SeedTasks() error {
+	if r.rw == nil {
+		return fmt.Errorf("task repo: rw not initialized")
+	}
 	var count int64
 	r.rw.Master().Model(&model.Task{}).Count(&count)
 	if count > 0 {
@@ -269,6 +299,9 @@ func (r *TaskRepository) invalidateCache(ctx context.Context, keys ...string) {
 // 通过子查询关联 tasks 表按 task_type 过滤，避免误删其他类型进度。
 // currentPeriod 应为 repository.GetCurrentPeriod(taskType) 的返回值。
 func (r *TaskRepository) ResetProgressByType(ctx context.Context, taskType, currentPeriod string) (int64, error) {
+	if r.rw == nil {
+		return 0, fmt.Errorf("task repo: rw not initialized")
+	}
 	result := r.rw.Write(ctx).
 		Where("task_id IN (SELECT id FROM tasks WHERE task_type = ?) AND period != ?", taskType, currentPeriod).
 		Delete(&model.UserTaskProgress{})
@@ -301,5 +334,8 @@ func GetCurrentPeriod(taskType string) string {
 
 // AutoMigrate 自动迁移（操作主库 DDL）
 func (r *TaskRepository) AutoMigrate() error {
+	if r.rw == nil {
+		return fmt.Errorf("task repo: rw not initialized")
+	}
 	return r.rw.Master().AutoMigrate(&model.Task{}, &model.UserTaskProgress{}, &model.EventDedup{})
 }

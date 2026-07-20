@@ -34,13 +34,12 @@ type Databases struct {
 	BusinessRW  *db.RWDB                  // 业务数据库（支持读写分离）
 	UserRepo    repository.UserRepository // 用户仓库（GORM 或 MongoDB）
 	MonitorRepo repository.MonitorRepo    // 监控仓库（GORM / ClickHouse）
-	LogRepo     repository.LogRepo        // 日志仓库（GORM / Elasticsearch）
-	LoginRepo   repository.LoginRepo      // 结构化登录记录仓库（跟随 log.driver：SQLite / Elasticsearch，ES 不可用时回退 SQLite）
+	LogRepo     repository.LogRepo        // 日志仓库（GORM / Elasticsearch），登录审计（含结构化登录字段）同落 audit_logs
 	pingCancel  context.CancelFunc        // 停止从库探活后台协程（由 Close 调用，避免泄漏）
 }
 
 // Close 统一释放 Databases 聚合的全部数据库连接，确保优雅关闭时不再泄漏。
-// 背景（13 §3.37）：此前 shutdown 仅关了 user/business 两类，monitor/log/login 三类的底层
+// 背景（13 §3.37）：此前 shutdown 仅关了 user/business 两类，monitor/log 两类的底层
 // 连接（GORM sql.DB / ClickHouse conn / ES client transport）从未关闭，回退 SQLite 时每次退出/
 // SIGHUP 都泄漏连接池。各 repo 的 Close 已补到接口（对齐 UserRepository）；本方法集中调用，
 // 单个 repo 关闭失败不影响其余资源释放（错误被聚合返回）。
@@ -68,11 +67,6 @@ func (d *Databases) Close() error {
 	if d.LogRepo != nil {
 		if err := d.LogRepo.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("log-db: %w", err))
-		}
-	}
-	if d.LoginRepo != nil {
-		if err := d.LoginRepo.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("login-db: %w", err))
 		}
 	}
 	if len(errs) > 0 {
@@ -175,9 +169,44 @@ func rwOpenGORM(name, driver, dsn string, models []interface{}, cfg *config.Conf
 	return db.CreateSingleRWDB(gormDB), nil
 }
 
+// driverConn 解析 DriverConfig 的 GORM 主库路径，返回实际连接 DSN 与主库使用的连接池：
+//   - driver == "mysql"：使用 mysql.master 及其专属连接池（mysql.max_idle_conns 等）；
+//   - 其它（默认 sqlite 兜底）：使用顶层 dsn（即 sqlite 文件）。此时 pool 返回值对 sqlite
+//     无意义（SQLite 适配器硬性 1/1），仅作占位，真正的回退库连接池由调用方单独传入。
+//
+// 使 user/monitor/log 在测试环境可切到 MySQL（与 business 同构的 GORM/MySQL 适配器），
+// 而不必依赖生产用的 MongoDB/ClickHouse/Elasticsearch。
+func driverConn(d config.DriverConfig) (string, db.PoolConfig) {
+	if d.Driver == "mysql" {
+		return d.MySQL.Master, db.PoolConfig{
+			MaxIdleConns:    d.MySQL.MaxIdleConns,
+			MaxOpenConns:    d.MySQL.MaxOpenConns,
+			ConnMaxLifetime: d.MySQL.ConnMaxLifetime,
+		}
+	}
+	return d.DSN, db.PoolConfig{
+		MaxIdleConns:    d.Pool.MaxIdleConns,
+		MaxOpenConns:    d.Pool.MaxOpenConns,
+		ConnMaxLifetime: d.Pool.ConnMaxLifetime,
+	}
+}
+
 // openGORMOrFallback 打开 GORM 数据库；若指定驱动连接失败且非 sqlite，则回退到 SQLite。
 // 统一 user/monitor/log/business 等「连接失败 → SQLite」逻辑，避免各分支重复 fallback。
-func openGORMOrFallback(name, driver, dsn, fallbackDSN string, models []interface{}, cfg *config.Config, pool db.PoolConfig) (*gorm.DB, error) {
+// toDBPool 将配置层的 DBPoolConfig（config 包）转换为 db 包的 PoolConfig（字段同名，跨包类型）。
+// 仅用于把 user/monitor/log 回退 sqlite 的「预期连接池」显式传入，避免回退路径混入主库连接池。
+func toDBPool(p config.DBPoolConfig) db.PoolConfig {
+	return db.PoolConfig{
+		MaxIdleConns:    p.MaxIdleConns,
+		MaxOpenConns:    p.MaxOpenConns,
+		ConnMaxLifetime: p.ConnMaxLifetime,
+	}
+}
+
+// openGORMOrFallback 打开 GORM 数据库；若指定驱动连接失败且非 sqlite，则回退到 SQLite。
+// pool 仅用于主库（mysql/postgres）；fallbackPool 用于回退的 sqlite 库（此处恒被 SQLite 适配器
+// 覆盖为 1/1，显式传入仅保证「回退路径拿到的是回退库应有的连接池配置」这一意图清晰、不混入主库池）。
+func openGORMOrFallback(name, driver, dsn, fallbackDSN string, models []interface{}, cfg *config.Config, pool, fallbackPool db.PoolConfig) (*gorm.DB, error) {
 	rw, err := rwOpenGORM(name, driver, dsn, models, cfg, pool)
 	if err == nil {
 		return rw.Master(), nil
@@ -186,7 +215,7 @@ func openGORMOrFallback(name, driver, dsn, fallbackDSN string, models []interfac
 		return nil, err
 	}
 	logger.L().Warn(fmt.Sprintf("%s DB (%s) unavailable, falling back to SQLite", name, driver), zap.Error(err))
-	rw, err = rwOpenGORM(name, "sqlite", fallbackDSN, models, cfg, db.PoolConfig{})
+	rw, err = rwOpenGORM(name, "sqlite", fallbackDSN, models, cfg, fallbackPool)
 	if err != nil {
 		return nil, err
 	}
@@ -197,8 +226,10 @@ func openGORMOrFallback(name, driver, dsn, fallbackDSN string, models []interfac
 // 统一以对应库的 SQLite DSN 打开 GORM，并交给 build 构造目标仓库。
 // 把 user/monitor/log 三处「rwOpenGORM + 判错 + NewXRepository」近重复代码收敛为一次调用；
 // 告警日志仍由各调用点按上下文（含后端专属字段）发出，本函数只负责「打开 + 构造」。
-func sqliteFallback[T any](name, dsn string, models []interface{}, cfg *config.Config, build func(*gorm.DB) T) (T, error) {
-	rw, err := rwOpenGORM(name, "sqlite", dsn, models, cfg, db.PoolConfig{})
+// pool 为回退 sqlite 库的预期连接池（SQLite 适配器会覆盖为 1/1，传入仅为意图明确，便于日后若
+// 放开文件型 SQLite 连接数限制时直接生效，无需再改调用点）。
+func sqliteFallback[T any](name, dsn string, models []interface{}, cfg *config.Config, build func(*gorm.DB) T, pool db.PoolConfig) (T, error) {
+	rw, err := rwOpenGORM(name, "sqlite", dsn, models, cfg, pool)
 	if err != nil {
 		var zero T
 		return zero, err
@@ -241,6 +272,7 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 		&model.IdleRecord{},
 		&model.IdleDailyPoints{},
 		&model.ShopItem{},
+		&model.ShopItemStockBucket{},
 		&model.ShopFlashActivity{},
 		&model.RedeemOrder{},
 		&model.PointsTransaction{},
@@ -335,7 +367,7 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 			pc := cfg.Database.Business.Postgres
 			businessPool = db.PoolConfig{MaxIdleConns: pc.MaxIdleConns, MaxOpenConns: pc.MaxOpenConns, ConnMaxLifetime: pc.ConnMaxLifetime}
 		}
-		businessDB, err := openGORMOrFallback("business", businessDriver, businessDSN, cfg.Database.Business.DSN, businessModels, cfg, businessPool)
+		businessDB, err := openGORMOrFallback("business", businessDriver, businessDSN, cfg.Database.Business.DSN, businessModels, cfg, businessPool, businessPool)
 		if err != nil {
 			return nil, err
 		}
@@ -362,7 +394,7 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 		if mc.DSN == "" {
 			zlog.Warn("MongoDB DSN is empty, falling back to SQLite for user")
 			repo, uErr := sqliteFallback("user", cfg.Database.User.DSN,
-				[]interface{}{&model.User{}}, cfg, repository.NewUserRepository)
+				[]interface{}{&model.User{}}, cfg, repository.NewUserRepository, toDBPool(cfg.Database.User.Pool))
 			if uErr != nil {
 				return nil, uErr
 			}
@@ -383,7 +415,7 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 					zap.String("dsn", mc.DSN),
 				)
 				repo, gormErr := sqliteFallback("user", cfg.Database.User.DSN,
-					[]interface{}{&model.User{}}, cfg, repository.NewUserRepository)
+					[]interface{}{&model.User{}}, cfg, repository.NewUserRepository, toDBPool(cfg.Database.User.Pool))
 				if gormErr != nil {
 					return nil, gormErr
 				}
@@ -394,7 +426,7 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 				if err := userRepo.AutoMigrate(); err != nil {
 					zlog.Warn("MongoDB migrate failed, falling back to SQLite for user", zap.Error(err))
 					repo, gormErr := sqliteFallback("user", cfg.Database.User.DSN,
-						[]interface{}{&model.User{}}, cfg, repository.NewUserRepository)
+						[]interface{}{&model.User{}}, cfg, repository.NewUserRepository, toDBPool(cfg.Database.User.Pool))
 					if gormErr != nil {
 						return nil, gormErr
 					}
@@ -403,13 +435,10 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 			}
 		}
 	} else {
-		userPool := db.PoolConfig{
-			MaxIdleConns:    cfg.Database.User.Pool.MaxIdleConns,
-			MaxOpenConns:    cfg.Database.User.Pool.MaxOpenConns,
-			ConnMaxLifetime: cfg.Database.User.Pool.ConnMaxLifetime,
-		}
-		userDB, err := openGORMOrFallback("user", cfg.Database.User.Driver, cfg.Database.User.DSN, cfg.Database.User.DSN,
-			[]interface{}{&model.User{}}, cfg, userPool)
+		// driver 可能为 mysql（测试）/ sqlite（默认）/ postgres：统一由 driverConn 解析 DSN 与连接池。
+		dsn, userPool := driverConn(cfg.Database.User)
+		userDB, err := openGORMOrFallback("user", cfg.Database.User.Driver, dsn, cfg.Database.User.DSN,
+			[]interface{}{&model.User{}}, cfg, userPool, toDBPool(cfg.Database.User.Pool))
 		if err != nil {
 			return nil, err
 		}
@@ -440,7 +469,7 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 				zap.Strings("addresses", cc.Addresses),
 			)
 			repo, gormErr := sqliteFallback("monitor", cfg.Database.Monitor.DSN,
-				[]interface{}{&model.MonitorMetric{}}, cfg, repository.NewMonitorRepository)
+				[]interface{}{&model.MonitorMetric{}}, cfg, repository.NewMonitorRepository, toDBPool(cfg.Database.Monitor.Pool))
 			if gormErr != nil {
 				return nil, gormErr
 			}
@@ -452,7 +481,7 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 				zlog.Warn("ClickHouse ensure table failed, falling back to SQLite", zap.Error(err))
 				_ = chAdapter.Close() // 已连上但建表失败，回退前释放 CH 连接（13 §3.42 ②）
 				repo, gormErr := sqliteFallback("monitor", cfg.Database.Monitor.DSN,
-					[]interface{}{&model.MonitorMetric{}}, cfg, repository.NewMonitorRepository)
+					[]interface{}{&model.MonitorMetric{}}, cfg, repository.NewMonitorRepository, toDBPool(cfg.Database.Monitor.Pool))
 				if gormErr != nil {
 					return nil, gormErr
 				}
@@ -462,13 +491,9 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 			}
 		}
 	} else {
-		monitorPool := db.PoolConfig{
-			MaxIdleConns:    cfg.Database.Monitor.Pool.MaxIdleConns,
-			MaxOpenConns:    cfg.Database.Monitor.Pool.MaxOpenConns,
-			ConnMaxLifetime: cfg.Database.Monitor.Pool.ConnMaxLifetime,
-		}
-		monitorDB, err := openGORMOrFallback("monitor", cfg.Database.Monitor.Driver, cfg.Database.Monitor.DSN, cfg.Database.Monitor.DSN,
-			[]interface{}{&model.MonitorMetric{}}, cfg, monitorPool)
+		dsn, monitorPool := driverConn(cfg.Database.Monitor)
+		monitorDB, err := openGORMOrFallback("monitor", cfg.Database.Monitor.Driver, dsn, cfg.Database.Monitor.DSN,
+			[]interface{}{&model.MonitorMetric{}}, cfg, monitorPool, toDBPool(cfg.Database.Monitor.Pool))
 		if err != nil {
 			return nil, err
 		}
@@ -480,14 +505,12 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 		metrics.RegisterDBPool("monitor", s)
 	}
 
-	// Log DB + 结构化登录记录仓库（需求 §6.9）：均隶属于「审计日志」域，统一读 log.driver 配置。
+	// Log DB（审计日志，含合并后的结构化登录字段）：隶属于「审计日志」域，统一读 log.driver 配置。
 	// 支持 elasticsearch / sqlite：
-	//   - log.driver=elasticsearch：审计日志与登录记录共享同一 ES 适配器写入 ES（避免重复建连）；
-	//   - log.driver 为其它（默认 sqlite）：审计日志与登录记录均落 SQLite（与 log 库同源）；
-	//   - elasticsearch 不可用时：二者统一回退 SQLite，保证登录审计结构化字段（失败原因等）可靠落库。
-	// loginRepo 为 nil 时 LogService.RecordLogin 自动 no-op，不影响主流程。
+	//   - log.driver=elasticsearch：审计日志（含登录记录）写入 ES（避免重复建连）；
+	//   - log.driver 为其它（默认 sqlite）：审计日志落 SQLite（与 log 库同源）；
+	//   - elasticsearch 不可用时：回退 SQLite，保证登录审计结构化字段（失败原因等）可靠落库。
 	var logRepo repository.LogRepo
-	var loginRepo repository.LoginRepo
 
 	if cfg.Database.Log.Driver == "elasticsearch" {
 		ec := cfg.Database.Log.Elasticsearch
@@ -499,24 +522,18 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 		})
 		if err := connectWithTimeout("elasticsearch", esAdapter.Connect); err != nil {
 			// ES 不可用时回退到 SQLite；半成功 Connect 可能已建连，显式 Close 释放底层 transport 连接池避免泄漏
-			// （13 §3.42 ②）。登录记录与审计日志共用同一适配器，一并回退。
+			// （13 §3.42 ②）。审计日志与登录记录共用同一适配器，一并回退。
 			_ = esAdapter.Close()
-			zlog.Warn("Elasticsearch unavailable, falling back to SQLite for log and login_record",
+			zlog.Warn("Elasticsearch unavailable, falling back to SQLite for audit_logs",
 				zap.Error(err),
 				zap.Strings("addresses", ec.Addresses),
 			)
 			repo, gormErr := sqliteFallback("log", cfg.Database.Log.DSN,
-				[]interface{}{&model.AuditLog{}}, cfg, repository.NewLogRepository)
+				[]interface{}{&model.AuditLog{}}, cfg, repository.NewLogRepository, toDBPool(cfg.Database.Log.Pool))
 			if gormErr != nil {
 				return nil, gormErr
 			}
 			logRepo = repo
-			loginFb, loginErr := sqliteFallback("login_record", cfg.Database.Log.DSN,
-				[]interface{}{&model.LoginRecord{}}, cfg, repository.NewLoginRepository)
-			if loginErr != nil {
-				return nil, loginErr
-			}
-			loginRepo = loginFb
 		} else {
 			zlog.Info("DB connected",
 				zap.String("driver", "elasticsearch"),
@@ -525,41 +542,21 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 				zap.String("index_prefix", ec.IndexPrefix),
 			)
 			logRepo = repository.NewESLogRepository(esAdapter)
-			loginRepo = repository.NewESLoginRepository(esAdapter)
 		}
 	} else {
-		logPool := db.PoolConfig{
-			MaxIdleConns:    cfg.Database.Log.Pool.MaxIdleConns,
-			MaxOpenConns:    cfg.Database.Log.Pool.MaxOpenConns,
-			ConnMaxLifetime: cfg.Database.Log.Pool.ConnMaxLifetime,
-		}
-		logDB, err := openGORMOrFallback("log", cfg.Database.Log.Driver, cfg.Database.Log.DSN, cfg.Database.Log.DSN,
-			[]interface{}{&model.AuditLog{}}, cfg, logPool)
+		dsn, logPool := driverConn(cfg.Database.Log)
+		logDB, err := openGORMOrFallback("log", cfg.Database.Log.Driver, dsn, cfg.Database.Log.DSN,
+			[]interface{}{&model.AuditLog{}}, cfg, logPool, toDBPool(cfg.Database.Log.Pool))
 		if err != nil {
 			return nil, err
 		}
 		logRepo = repository.NewLogRepository(logDB)
-
-		// 登录记录与审计日志同源（默认 sqlite），复用 log.driver 配置下的 DSN / 驱动，
-		// 主驱动不可用时同样回退 sqlite（保证登录审计结构化字段可靠落库）。
-		loginDB, lerr := openGORMOrFallback("login_record", cfg.Database.Log.Driver, cfg.Database.Log.DSN, cfg.Database.Log.DSN,
-			[]interface{}{&model.LoginRecord{}}, cfg, logPool)
-		if lerr != nil {
-			zlog.Warn("login_record init failed, login records disabled", zap.Error(lerr))
-		} else {
-			loginRepo = repository.NewLoginRepository(loginDB)
-		}
 	}
 
-	// 注册 log / login_record 库连接池指标（ES 驱动无 *sql.DB，SQLDB() 返回 error 自动跳过）。
+	// 注册 log 库连接池指标（ES 驱动无 *sql.DB，SQLDB() 返回 error 自动跳过）。
 	if logRepo != nil {
 		if s, e := logRepo.SQLDB(); e == nil {
 			metrics.RegisterDBPool("log", s)
-		}
-	}
-	if loginRepo != nil {
-		if s, e := loginRepo.SQLDB(); e == nil {
-			metrics.RegisterDBPool("login_record", s)
 		}
 	}
 
@@ -569,7 +566,6 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 		UserRepo:    userRepo,
 		MonitorRepo: monitorRepo,
 		LogRepo:     logRepo,
-		LoginRepo:   loginRepo,
 		pingCancel:  pingCancel,
 	}, nil
 }

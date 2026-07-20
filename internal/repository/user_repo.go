@@ -43,11 +43,17 @@ func NewUserRepository(db *gorm.DB) UserRepository {
 
 // Create 创建用户
 func (r *gormUserRepository) Create(ctx context.Context, user *model.User) error {
+	if r.db == nil {
+		return fmt.Errorf("user repo: db not initialized")
+	}
 	return r.db.WithContext(ctx).Create(user).Error
 }
 
 // FindByID 根据 UserID 查询
 func (r *gormUserRepository) FindByID(ctx context.Context, userID string) (*model.User, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("user repo: db not initialized")
+	}
 	var user model.User
 	err := r.db.WithContext(ctx).Where("user_id = ?", userID).First(&user).Error
 	if err != nil {
@@ -61,6 +67,9 @@ func (r *gormUserRepository) FindByID(ctx context.Context, userID string) (*mode
 
 // FindByEmail 根据邮箱查询
 func (r *gormUserRepository) FindByEmail(ctx context.Context, email string) (*model.User, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("user repo: db not initialized")
+	}
 	var user model.User
 	err := r.db.WithContext(ctx).Where("email = ?", email).First(&user).Error
 	if err != nil {
@@ -74,6 +83,9 @@ func (r *gormUserRepository) FindByEmail(ctx context.Context, email string) (*mo
 
 // FindByGoogleID 根据 Google ID 查询
 func (r *gormUserRepository) FindByGoogleID(ctx context.Context, googleID string) (*model.User, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("user repo: db not initialized")
+	}
 	var user model.User
 	err := r.db.WithContext(ctx).Where("google_id = ?", googleID).First(&user).Error
 	if err != nil {
@@ -87,11 +99,17 @@ func (r *gormUserRepository) FindByGoogleID(ctx context.Context, googleID string
 
 // Update 更新用户
 func (r *gormUserRepository) Update(ctx context.Context, user *model.User) error {
+	if r.db == nil {
+		return fmt.Errorf("user repo: db not initialized")
+	}
 	return r.db.WithContext(ctx).Save(user).Error
 }
 
 // UpdatePoints 原子更新积分余额
 func (r *gormUserRepository) UpdatePoints(ctx context.Context, userID string, amount int64) error {
+	if r.db == nil {
+		return fmt.Errorf("user repo: db not initialized")
+	}
 	result := r.db.WithContext(ctx).Model(&model.User{}).
 		Where("user_id = ? AND points_balance >= ?", userID, -amount).
 		Update("points_balance", gorm.Expr("points_balance + ?", amount))
@@ -106,6 +124,9 @@ func (r *gormUserRepository) UpdatePoints(ctx context.Context, userID string, am
 
 // UpdatePassword 更新密码哈希和修改时间
 func (r *gormUserRepository) UpdatePassword(ctx context.Context, userID, passwordHash string, changedAt interface{}) error {
+	if r.db == nil {
+		return fmt.Errorf("user repo: db not initialized")
+	}
 	return r.db.WithContext(ctx).Model(&model.User{}).
 		Where("user_id = ?", userID).
 		Updates(map[string]interface{}{
@@ -116,11 +137,17 @@ func (r *gormUserRepository) UpdatePassword(ctx context.Context, userID, passwor
 
 // AutoMigrate 自动迁移
 func (r *gormUserRepository) AutoMigrate() error {
+	if r.db == nil {
+		return fmt.Errorf("user repo: db not initialized")
+	}
 	return r.db.AutoMigrate(&model.User{})
 }
 
 // Close 关闭底层 GORM/sql 连接池，释放 userDB 连接。
 func (r *gormUserRepository) Close() error {
+	if r.db == nil {
+		return nil // 无连接可释放（与读/写路径 nil-db 守卫一致，避免 shutdown 时 panic）
+	}
 	sqlDB, err := r.db.DB()
 	if err != nil {
 		return err
@@ -130,5 +157,8 @@ func (r *gormUserRepository) Close() error {
 
 // SQLDB 返回底层 *sql.DB，供监控采集连接池统计。
 func (r *gormUserRepository) SQLDB() (*sql.DB, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("user repo: db not initialized")
+	}
 	return r.db.DB()
 }

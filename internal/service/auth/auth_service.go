@@ -297,26 +297,26 @@ func (s *AuthService) Login(ctx context.Context, req *LoginRequest) (*LoginResul
 		return nil, fmt.Errorf("find user: %w", err)
 	}
 	if user == nil {
-		s.recordLoginAttempt(ctx, req.Email, "", model.LoginResultFail, "user_not_found")
+		s.recordLoginAttempt(ctx, common.BuildMeta(ctx, req.Email), req.Email, model.LoginTypePassword, model.LoginResultFail, model.FailReasonUserNotFound)
 		return nil, ErrInvalidCredentials
 	}
 
 	// 检查账号状态（管理员禁用）
 	if user.Status != "active" {
-		s.recordLoginAttempt(ctx, user.UserID, user.UserID, model.LoginResultFail, "account_disabled")
+		s.recordLoginAttempt(ctx, common.BuildMeta(ctx, user.UserID), user.Email, model.LoginTypePassword, model.LoginResultFail, model.FailReasonAccountDisabled)
 		return nil, ErrAccountLocked
 	}
 
 	// 检查是否因连续失败被锁定（security.account_lock）
 	if s.isAccountLocked(ctx, req.Email) {
-		s.recordLoginAttempt(ctx, user.UserID, user.UserID, model.LoginResultFail, "account_locked")
+		s.recordLoginAttempt(ctx, common.BuildMeta(ctx, user.UserID), user.Email, model.LoginTypePassword, model.LoginResultFail, model.FailReasonAccountLocked)
 		return nil, ErrAccountLocked
 	}
 
 	// 验证密码
 	if bcrypt.Compare(user.PasswordHash, req.Password) != nil {
 		s.recordLoginFailure(ctx, req.Email)
-		s.recordLoginAttempt(ctx, user.UserID, user.UserID, model.LoginResultFail, "password_wrong")
+		s.recordLoginAttempt(ctx, common.BuildMeta(ctx, user.UserID), user.Email, model.LoginTypePassword, model.LoginResultFail, model.FailReasonPasswordWrong)
 		return nil, ErrInvalidCredentials
 	}
 
@@ -335,8 +335,7 @@ func (s *AuthService) Login(ctx context.Context, req *LoginRequest) (*LoginResul
 		LoginType: "password",
 	})
 
-	s.logSvc.LogLogin(ctx, common.BuildMeta(ctx, user.UserID), user.Email, true)
-	s.recordLoginAttempt(ctx, user.UserID, user.UserID, model.LoginResultSuccess, "")
+	s.logSvc.LogLogin(ctx, common.BuildMeta(ctx, user.UserID), model.LoginTypePassword, model.LoginResultSuccess, user.Email, "", "")
 
 	return result, nil
 }
@@ -357,12 +356,9 @@ func (s *AuthService) IssueTokens(user *model.User) (*LoginResult, error) {
 	}, nil
 }
 
-// recordLoginAttempt 记录一次登录尝试（userID/email 相同则用一个，找不到用户时 userID 可传空）。
-func (s *AuthService) recordLoginAttempt(ctx context.Context, auditID, userID, result, reason string) {
-	if userID == "" {
-		userID = auditID
-	}
-	s.logSvc.RecordLogin(ctx, common.BuildMeta(ctx, auditID), model.LoginTypePassword, result, reason, "")
+// recordLoginAttempt 记录一次登录尝试（合并 login_records 后统一走 LogLogin，单次落 audit_logs）。
+func (s *AuthService) recordLoginAttempt(ctx context.Context, meta common.EventMeta, email, loginType, result, reason string) {
+	s.logSvc.LogLogin(ctx, meta, loginType, result, email, reason, "")
 }
 
 // GoogleOAuthLogin Google OAuth 登录/注册
@@ -417,8 +413,8 @@ func (s *AuthService) GoogleOAuthLogin(ctx context.Context, googleID, email, nam
 		LoginType: "google",
 	})
 
-	// 结构化登录记录（需求 §6.9，login_type=google）
-	s.logSvc.RecordLogin(ctx, common.BuildMeta(ctx, user.UserID), model.LoginTypeGoogle, model.LoginResultSuccess, "", "")
+	// 结构化登录记录（合并 login_records 后同落 audit_logs，login_type=google）
+	s.logSvc.LogLogin(ctx, common.BuildMeta(ctx, user.UserID), model.LoginTypeGoogle, model.LoginResultSuccess, user.Email, "", "")
 
 	return &LoginResult{
 		User:         user,
@@ -435,7 +431,7 @@ func (s *AuthService) GoogleOAuthCode(ctx context.Context, code string) (*LoginR
 		return nil, err
 	}
 	if info.Sub == "" {
-		s.logSvc.RecordLogin(ctx, common.BuildMeta(ctx, info.Email), model.LoginTypeGoogle, model.LoginResultFail, "oauth_failed", "")
+		s.logSvc.LogLogin(ctx, common.BuildMeta(ctx, info.Email), model.LoginTypeGoogle, model.LoginResultFail, info.Email, model.FailReasonOAuthFailed, "")
 		return nil, ErrOAuthFailed
 	}
 	return s.GoogleOAuthLogin(ctx, info.Sub, info.Email, info.Name, info.Picture)

@@ -50,6 +50,9 @@ func NewShopRepositoryFromTx(tx *gorm.DB) *ShopRepository {
 
 // FindItems 获取商品列表（读从库，游标分页 + 分类筛选）
 func (r *ShopRepository) FindItems(ctx context.Context, cursor int64, limit int, category string) ([]model.ShopItem, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("shop repo: rw not initialized")
+	}
 	if limit <= 0 {
 		limit = 20
 	}
@@ -81,6 +84,9 @@ func (r *ShopRepository) FindItems(ctx context.Context, cursor int64, limit int,
 // fillBucketStock 用桶之和覆盖 items 中各商品的 Stock（仅对存在桶的商品生效；无桶商品保持原值）。
 // 单次分组查询覆盖整批商品，避免 N 次往返。
 func (r *ShopRepository) fillBucketStock(ctx context.Context, items []model.ShopItem) {
+	if r.rw == nil {
+		return
+	}
 	if len(items) == 0 {
 		return
 	}
@@ -120,6 +126,9 @@ func (r *ShopRepository) fillBucketStock(ctx context.Context, items []model.Shop
 // 真正的扣减与防超卖由 DB 行锁保证，不会因缓存旧值而误判库存不足。这样普通兑换路径无需
 // 每次强读主库、也无需绕过缓存。
 func (r *ShopRepository) FindItemByID(ctx context.Context, id int64) (*model.ShopItem, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("shop repo: rw not initialized")
+	}
 	cacheKey := fmt.Sprintf("shop:item:%d", id)
 	const ttl = 120 * time.Second
 
@@ -166,6 +175,9 @@ func (r *ShopRepository) FindItemByID(ctx context.Context, id int64) (*model.Sho
 
 // fillItemStock 用桶之和覆盖单个商品的 Stock（无桶商品保持原值）。
 func (r *ShopRepository) fillItemStock(ctx context.Context, item *model.ShopItem) {
+	if r.rw == nil {
+		return
+	}
 	if item == nil {
 		return
 	}
@@ -177,6 +189,9 @@ func (r *ShopRepository) fillItemStock(ctx context.Context, item *model.ShopItem
 
 // TotalStock 返回商品当前可用库存：有桶时取桶之和（分桶权威值），无桶时退回 shop_items.stock。
 func (r *ShopRepository) TotalStock(ctx context.Context, id int64) (int, error) {
+	if r.rw == nil {
+		return 0, fmt.Errorf("shop repo: rw not initialized")
+	}
 	var cnt int64
 	if err := r.rw.Read(ctx).Model(&model.ShopItemStockBucket{}).Where("item_id = ?", id).Count(&cnt).Error; err != nil {
 		return 0, err
@@ -206,6 +221,9 @@ func (r *ShopRepository) TotalStock(ctx context.Context, id int64) (int, error) 
 //
 // shardKey 一般传 userID，使其稳定命中同一桶、不同用户分散到不同桶。
 func (r *ShopRepository) DeductStock(ctx context.Context, id int64, quantity int, shardKey string) error {
+	if r.rw == nil {
+		return fmt.Errorf("shop repo: rw not initialized")
+	}
 	var bucketCnt int64
 	if err := r.rw.Read(ctx).Model(&model.ShopItemStockBucket{}).Where("item_id = ?", id).Count(&bucketCnt).Error; err != nil {
 		return err
@@ -248,6 +266,9 @@ func (r *ShopRepository) DeductStock(ctx context.Context, id int64, quantity int
 // 幂等：已存在桶行时 ON CONFLICT DO NOTHING 跳过，不覆盖已扣减的库存。
 // 仅用于种子初始化——已存在的桶不应被重新均分（会丢失已扣减状态）。
 func (r *ShopRepository) CreateStockBuckets(ctx context.Context, itemID int64, total int) error {
+	if r.rw == nil {
+		return fmt.Errorf("shop repo: rw not initialized")
+	}
 	buckets := makeBuckets(itemID, total, stockBucketCount)
 	return r.rw.Master().Clauses(clause.OnConflict{DoNothing: true}).Create(&buckets).Error
 }
@@ -271,6 +292,9 @@ func makeBuckets(itemID int64, total, n int) []model.ShopItemStockBucket {
 // 已扣减过的库存以当前 shop_items.stock 为基准均分，保证桶之和 == 当前真实可用库存。
 // 用于存量库升级：AutoMigrate 建表后由 bootstrap 调用一次。
 func (r *ShopRepository) BackfillStockBuckets(ctx context.Context) error {
+	if r.rw == nil {
+		return fmt.Errorf("shop repo: rw not initialized")
+	}
 	type idStock struct {
 		ID    int64 `gorm:"column:id"`
 		Stock int   `gorm:"column:stock"`
@@ -299,11 +323,17 @@ func (r *ShopRepository) invalidateItemCache(ctx context.Context, itemID int64) 
 
 // CreateOrder 创建兑换订单（写主库）
 func (r *ShopRepository) CreateOrder(ctx context.Context, order *model.RedeemOrder) error {
+	if r.rw == nil {
+		return fmt.Errorf("shop repo: rw not initialized")
+	}
 	return r.rw.Write(ctx).Create(order).Error
 }
 
 // FindOrders 查询订单列表（读从库，游标分页）
 func (r *ShopRepository) FindOrders(ctx context.Context, userID string, cursor int64, limit int) ([]model.RedeemOrder, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("shop repo: rw not initialized")
+	}
 	if limit <= 0 {
 		limit = 20
 	}
@@ -325,6 +355,9 @@ func (r *ShopRepository) FindOrders(ctx context.Context, userID string, cursor i
 
 // FindOrderByID 根据订单 ID 查询（读从库）
 func (r *ShopRepository) FindOrderByID(ctx context.Context, orderID int64) (*model.RedeemOrder, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("shop repo: rw not initialized")
+	}
 	var order model.RedeemOrder
 	err := r.rw.Read(ctx).First(&order, orderID).Error
 	if err != nil {
@@ -338,6 +371,9 @@ func (r *ShopRepository) FindOrderByID(ctx context.Context, orderID int64) (*mod
 
 // CreateTransaction 创建积分流水（写主库）
 func (r *ShopRepository) CreateTransaction(ctx context.Context, tx *model.PointsTransaction) error {
+	if r.rw == nil {
+		return fmt.Errorf("shop repo: rw not initialized")
+	}
 	return r.rw.Write(ctx).Create(tx).Error
 }
 
@@ -345,6 +381,9 @@ func (r *ShopRepository) CreateTransaction(ctx context.Context, tx *model.Points
 
 // FindActivityByID 根据 ID 查询抢购活动（读从库）。
 func (r *ShopRepository) FindActivityByID(ctx context.Context, id int64) (*model.ShopFlashActivity, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("shop repo: rw not initialized")
+	}
 	var act model.ShopFlashActivity
 	err := r.rw.Read(ctx).First(&act, id).Error
 	if err != nil {
@@ -360,6 +399,9 @@ func (r *ShopRepository) FindActivityByID(ctx context.Context, id int64) (*model
 // includeEnded=false 时只返回进行中（状态 active 且在时间窗内）；true 时额外包含已结束（运营后台全量视角）。
 // 读从库，按开始时间倒序。
 func (r *ShopRepository) FindActivities(ctx context.Context, includeEnded bool, limit int) ([]model.ShopFlashActivity, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("shop repo: rw not initialized")
+	}
 	if limit <= 0 {
 		limit = 20
 	}
@@ -390,6 +432,9 @@ func (r *ShopRepository) FindActivities(ctx context.Context, includeEnded bool, 
 // 状态为 active 或 pending，且 (end_time 为零 或 end_time >= now)，且 start_time 落在
 // [now-lead, now+lead] 窗口内（覆盖「即将开抢」与「已开始但预热/对账遗漏」两类）。
 func (r *ShopRepository) ListWarmupCandidates(ctx context.Context, now time.Time, lead time.Duration) ([]model.ShopFlashActivity, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("shop repo: rw not initialized")
+	}
 	var acts []model.ShopFlashActivity
 	err := r.rw.Read(ctx).Model(&model.ShopFlashActivity{}).
 		Where("status IN ?", []string{model.FlashSaleStatusActive, model.FlashSaleStatusPending}).
@@ -406,6 +451,9 @@ func (r *ShopRepository) ListWarmupCandidates(ctx context.Context, now time.Time
 //
 // 仅更新 Status 字段，不动 sold_qty 等运行期权威计数；已是目标状态的活动不受影响。
 func (r *ShopRepository) TransitionStaleStatuses(ctx context.Context, now time.Time) (int64, error) {
+	if r.rw == nil {
+		return 0, fmt.Errorf("shop repo: rw not initialized")
+	}
 	res := r.rw.Write(ctx).Model(&model.ShopFlashActivity{}).
 		Where("status = ? AND start_time <= ?", model.FlashSaleStatusPending, now).
 		Update("status", model.FlashSaleStatusActive)
@@ -424,12 +472,18 @@ func (r *ShopRepository) TransitionStaleStatuses(ctx context.Context, now time.T
 
 // CreateActivity 创建抢购活动（写主库，供运营配置）。
 func (r *ShopRepository) CreateActivity(ctx context.Context, act *model.ShopFlashActivity) error {
+	if r.rw == nil {
+		return fmt.Errorf("shop repo: rw not initialized")
+	}
 	return r.rw.Write(ctx).Create(act).Error
 }
 
 // UpdateActivity 更新抢购活动（写主库，供运营调整限量/每人限购/时间窗/状态等）。
 // Updates 显式列出可改字段，避免误改 sold_qty 等运行期权威计数。
 func (r *ShopRepository) UpdateActivity(ctx context.Context, act *model.ShopFlashActivity) error {
+	if r.rw == nil {
+		return fmt.Errorf("shop repo: rw not initialized")
+	}
 	return r.rw.Write(ctx).Model(&model.ShopFlashActivity{}).
 		Where("id = ?", act.ID).
 		Updates(map[string]interface{}{
@@ -447,6 +501,9 @@ func (r *ShopRepository) UpdateActivity(ctx context.Context, act *model.ShopFlas
 // 条件更新：仅当 sold_qty < limit_qty 时 +1，行锁天然串行，RowsAffected==0 即已抢光。
 // 返回 (true, nil) 表示扣减成功；(false, nil) 表示已抢光。
 func (r *ShopRepository) AcquireFlashQuota(ctx context.Context, activityID int64) (bool, error) {
+	if r.rw == nil {
+		return false, fmt.Errorf("shop repo: rw not initialized")
+	}
 	result := r.rw.Write(ctx).Model(&model.ShopFlashActivity{}).
 		Where("id = ? AND sold_qty < limit_qty", activityID).
 		Update("sold_qty", gorm.Expr("sold_qty + 1"))
@@ -458,6 +515,9 @@ func (r *ShopRepository) AcquireFlashQuota(ctx context.Context, activityID int64
 
 // ReleaseFlashQuota 回滚一次 DB 配额扣减（入库事务失败时释放，sold_qty>0 才回退）。
 func (r *ShopRepository) ReleaseFlashQuota(ctx context.Context, activityID int64) error {
+	if r.rw == nil {
+		return fmt.Errorf("shop repo: rw not initialized")
+	}
 	return r.rw.Write(ctx).Model(&model.ShopFlashActivity{}).
 		Where("id = ? AND sold_qty > 0", activityID).
 		Update("sold_qty", gorm.Expr("sold_qty - 1")).Error
@@ -473,6 +533,9 @@ func (r *ShopRepository) ReleaseFlashQuota(ctx context.Context, activityID int64
 // 的兜底。缓存 TTL 较短，且抢购成功后会失效该 key（见 ShopService.FlashRedeem 的 committed 路径），
 // 保证兜底计数在成功下单后即时刷新，不会放行同人短时间内二次抢购（即便 Redis 恰巧宕机）。
 func (r *ShopRepository) CountUserFlashOrders(ctx context.Context, activityID int64, userID string) (int64, error) {
+	if r.rw == nil {
+		return 0, fmt.Errorf("shop repo: rw not initialized")
+	}
 	if r.cacheMgr != nil && r.cacheMgr.L2Enabled() {
 		key := cache.FlashUserFlashCountCacheKey(activityID, userID)
 		load := func(c context.Context) (interface{}, error) {
@@ -500,11 +563,17 @@ func (r *ShopRepository) CountUserFlashOrders(ctx context.Context, activityID in
 
 // Transaction 在主库上执行事务
 func (r *ShopRepository) Transaction(ctx context.Context, fn func(tx *gorm.DB) error) error {
+	if r.rw == nil {
+		return fmt.Errorf("shop repo: rw not initialized")
+	}
 	return r.rw.Transaction(ctx, fn)
 }
 
 // SeedItems 初始化默认商品数据（写主库）
 func (r *ShopRepository) SeedItems() error {
+	if r.rw == nil {
+		return fmt.Errorf("shop repo: rw not initialized")
+	}
 	var count int64
 	r.rw.Master().Model(&model.ShopItem{}).Count(&count)
 	if count > 0 {
@@ -547,5 +616,8 @@ var _ = clause.Locking{Strength: "UPDATE"}
 
 // AutoMigrate 自动迁移（DDL 操作主库）
 func (r *ShopRepository) AutoMigrate() error {
+	if r.rw == nil {
+		return fmt.Errorf("shop repo: rw not initialized")
+	}
 	return r.rw.Master().AutoMigrate(&model.ShopItem{}, &model.RedeemOrder{}, &model.PointsTransaction{}, &model.ShopFlashActivity{}, &model.ShopItemStockBucket{})
 }

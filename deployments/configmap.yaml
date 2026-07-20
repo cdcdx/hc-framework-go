@@ -31,9 +31,19 @@ data:
   APP_DATABASE_BUSINESS_MYSQL_MAX_IDLE_CONNS: "25"
   APP_DATABASE_BUSINESS_MYSQL_MAX_OPEN_CONNS: "200"
   APP_DATABASE_BUSINESS_MYSQL_CONN_MAX_LIFETIME: "1h"
+  # 生产用 MongoDB；测试环境可将下方 driver 改为 mysql，并补充主库 DSN（与 business 同构的 GORM/MySQL 适配器，
+  # 连接池取自 database.user.mysql.max_idle_conns 等子段）。
   APP_DATABASE_USER_DRIVER: "mongodb"
+  # APP_DATABASE_USER_MYSQL_MASTER: "mysql://root:$(MYSQL_PASSWORD)@mysql-master:3306/hc_users?charset=utf8mb4&parseTime=True"
+  # APP_DATABASE_USER_MYSQL_MAX_OPEN_CONNS: "100"
+  # 生产用 Elasticsearch；测试环境可改为 mysql（审计日志/登录记录共用该库）。
   APP_DATABASE_LOG_DRIVER: "elasticsearch"
+  # APP_DATABASE_LOG_MYSQL_MASTER: "mysql://root:$(MYSQL_PASSWORD)@mysql-master:3306/hc_logs?charset=utf8mb4&parseTime=True"
+  # APP_DATABASE_LOG_MYSQL_MAX_OPEN_CONNS: "100"
+  # 生产用 ClickHouse；测试环境可改为 mysql。
   APP_DATABASE_MONITOR_DRIVER: "clickhouse"
+  # APP_DATABASE_MONITOR_MYSQL_MASTER: "mysql://root:$(MYSQL_PASSWORD)@mysql-master:3306/hc_monitor?charset=utf8mb4&parseTime=True"
+  # APP_DATABASE_MONITOR_MYSQL_MAX_OPEN_CONNS: "100"
   APP_DATABASE_FALLBACK_ENABLED: "true"
   APP_DATABASE_READ_WRITE_SPLIT_ENABLED: "true"
 

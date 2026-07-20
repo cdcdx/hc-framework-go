@@ -39,6 +39,9 @@ func (f *fakeLogRepo) FindByType(_ context.Context, _ string, _, _ time.Time, _ 
 func (f *fakeLogRepo) CountByType(_ context.Context, _ string, _, _ time.Time) (int64, error) {
 	return 0, nil
 }
+func (f *fakeLogRepo) CountByTypeAndResult(_ context.Context, _, _ string, _, _ time.Time) (int64, error) {
+	return 0, nil
+}
 func (f *fakeLogRepo) Close() error            { return nil }
 func (f *fakeLogRepo) SQLDB() (*sql.DB, error) { return nil, nil }
 
@@ -94,7 +97,7 @@ func newTestShop(t *testing.T) (*shop.ShopService, *gorm.DB) {
 	gdb := openTestDB(t, "shop", &model.ShopItem{}, &model.RedeemOrder{}, &model.PointsTransaction{}, &model.User{}, &model.PointsOutbox{}, &model.ShopItemStockBucket{})
 	businessDB := db.CreateSingleRWDB(gdb)
 	userRepo := repository.NewUserRepository(gdb)
-	logSvc := common.NewLogService(&fakeLogRepo{}, &fakeMonitorRepo{}, nil)
+	logSvc := common.NewLogService(&fakeLogRepo{}, &fakeMonitorRepo{})
 	t.Cleanup(func() { logSvc.Close() })
 
 	svc := shop.NewShopService(&config.Config{}, userRepo, businessDB, logSvc, nil, nil, nil)
@@ -110,7 +113,7 @@ func newTestTask(t *testing.T) (*task.TaskService, *gorm.DB) {
 	gdb := openTestDB(t, "task", &model.Task{}, &model.UserTaskProgress{}, &model.EventDedup{}, &model.User{}, &model.PointsTransaction{}, &model.PointsOutbox{})
 	businessDB := db.CreateSingleRWDB(gdb)
 	userRepo := repository.NewUserRepository(gdb)
-	logSvc := common.NewLogService(&fakeLogRepo{}, &fakeMonitorRepo{}, nil)
+	logSvc := common.NewLogService(&fakeLogRepo{}, &fakeMonitorRepo{})
 	t.Cleanup(func() { logSvc.Close() })
 
 	svc := task.NewTaskService(&config.Config{}, userRepo, businessDB, logSvc, nil, nil)
@@ -126,7 +129,7 @@ func newTestIdle(t *testing.T) (*idle.IdleService, *gorm.DB) {
 	gdb := openTestDB(t, "idle", &model.IdleRecord{}, &model.User{})
 	businessDB := db.CreateSingleRWDB(gdb)
 	userRepo := repository.NewUserRepository(gdb)
-	logSvc := common.NewLogService(&fakeLogRepo{}, &fakeMonitorRepo{}, nil)
+	logSvc := common.NewLogService(&fakeLogRepo{}, &fakeMonitorRepo{})
 	t.Cleanup(func() { logSvc.Close() })
 
 	svc := idle.NewIdleService(&config.Config{}, userRepo, businessDB, logSvc, nil, nil, nil)

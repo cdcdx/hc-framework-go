@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,13 +20,6 @@ import (
 
 // ───────────────────────── 仓库 / 存储 fake（隔离外部依赖） ─────────────────────────
 // 注：fakeLogRepo / fakeMonitorRepo 已在 fixtures_test.go 中定义并复用。
-
-type fakeLoginRepo struct{}
-
-func (fakeLoginRepo) Create(context.Context, *model.LoginRecord) error        { return nil }
-func (fakeLoginRepo) CreateBatch(context.Context, []*model.LoginRecord) error { return nil }
-func (fakeLoginRepo) Close() error                                            { return nil }
-func (fakeLoginRepo) SQLDB() (*sql.DB, error)                                 { return nil, nil }
 
 type fakeLockStore struct {
 	mu     sync.Mutex
@@ -128,7 +120,7 @@ func setupAuthSvc(t *testing.T) (*auth.AuthService, *fakeUserRepo, *fakeProducer
 		},
 	})
 	repo := newFakeUserRepo()
-	logSvc := common.NewLogService(&fakeLogRepo{}, &fakeMonitorRepo{}, &fakeLoginRepo{})
+	logSvc := common.NewLogService(&fakeLogRepo{}, &fakeMonitorRepo{})
 	t.Cleanup(logSvc.Close)
 	fp := &fakeProducer{}
 	svc := auth.NewAuthService(cfg, repo, logSvc, newFakeBlacklist(), fp, newFakeLockStore(), nil)

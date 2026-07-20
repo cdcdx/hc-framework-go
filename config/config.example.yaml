@@ -112,19 +112,19 @@ cache:
 # 数据库配置
 # ------------------------------------------
 database:
-  # 业务数据（MySQL / PostgreSQL / SQLite）
+  # 业务数据（PostgreSQL / MySQL / SQLite）
   business:
-    driver: "mysql"        # mysql / postgres / sqlite
+    driver: "mysql"        # postgres / mysql / sqlite
     dsn: "file:./data/hc_business.db?cache=shared&_journal_mode=WAL"
     mysql:
       master: "mysql://demo:123456@127.0.0.1:3306/hc_business?charset=utf8mb4&parseTime=True"
+      max_idle_conns: 25
+      max_open_conns: 120      # 须 ≤ MySQL max_connections(151)，否则高并发触发 Too many connections
+      conn_max_lifetime: 1h
       # 预估主从复制延迟（延迟双删退避参考；0=关闭）
       replication_lag: 0s  # 密码勿提交
       slaves:
         - "mysql://demo:123456@127.0.0.1:3307/hc_business?charset=utf8mb4&parseTime=True"
-      max_idle_conns: 25
-      max_open_conns: 120      # 须 ≤ MySQL max_connections(151)，否则高并发触发 Too many connections
-      conn_max_lifetime: 1h
       slave_ping_interval: 3s
     postgres:
       master: "postgres://demo:123456@127.0.0.1:5432/hc_business?sslmode=disable"
@@ -133,24 +133,39 @@ database:
       max_idle_conns: 25
       max_open_conns: 120      # 同上，避免超过数据库服务端连接上限
       conn_max_lifetime: 1h
-  # 用户数据（MongoDB / SQLite）
+  # 用户数据（MongoDB / MySQL / SQLite）
   user:
-    driver: "mongodb"        # mongodb / sqlite
+    driver: "mongodb"        # mongodb / mysql / sqlite
     dsn: "file:./data/hc_users.db?cache=shared&_journal_mode=WAL"
+    mysql:
+      master: "mysql://demo:123456@127.0.0.1:3306/hc_users?charset=utf8mb4&parseTime=True"
+      max_idle_conns: 25
+      max_open_conns: 120      # 须 ≤ MySQL max_connections(151)，否则高并发触发 Too many connections
+      conn_max_lifetime: 1h
     mongodb:
       dsn: "mongodb://demo:123456@127.0.0.1:27017/hc_users?authSource=admin&authMechanism=SCRAM-SHA-1"  # 密码勿提交
       min_pool_size: 10
       max_pool_size: 100
-  # 监控数据（ClickHouse / SQLite）
+  # 监控数据（ClickHouse / MySQL / SQLite）
   monitor:
-    driver: "clickhouse"        # clickhouse / sqlite
+    driver: "clickhouse"        # clickhouse / mysql / sqlite
     dsn: "file:./data/hc_monitor.db?cache=shared&_journal_mode=WAL"
+    mysql:
+      master: "mysql://demo:123456@127.0.0.1:3306/hc_monitor?charset=utf8mb4&parseTime=True"
+      max_idle_conns: 25
+      max_open_conns: 120      # 须 ≤ MySQL max_connections(151)，否则高并发触发 Too many connections
+      conn_max_lifetime: 1h
     clickhouse:
       dsn: "clickhouse://admin:123456@127.0.0.1:19000/hc_monitor?compress=0"  # 密码勿提交
-  # 日志数据（Elasticsearch / SQLite）
+  # 日志数据（Elasticsearch / MySQL / SQLite）
   log:
-    driver: "elasticsearch"        # elasticsearch / sqlite
+    driver: "elasticsearch"        # elasticsearch / mysql / sqlite
     dsn: "file:./data/hc_logs.db?cache=shared&_journal_mode=WAL"
+    mysql:
+      master: "mysql://demo:123456@127.0.0.1:3306/hc_logs?charset=utf8mb4&parseTime=True"
+      max_idle_conns: 25
+      max_open_conns: 120      # 须 ≤ MySQL max_connections(151)，否则高并发触发 Too many connections
+      conn_max_lifetime: 1h
     elasticsearch:
       addresses:
         - "http://127.0.0.1:9200"

@@ -141,6 +141,9 @@ func (noopLogRepo) FindByType(ctx context.Context, eventType string, start, end 
 func (noopLogRepo) CountByType(ctx context.Context, eventType string, start, end time.Time) (int64, error) {
 	return 0, nil
 }
+func (noopLogRepo) CountByTypeAndResult(ctx context.Context, eventType, result string, start, end time.Time) (int64, error) {
+	return 0, nil
+}
 func (noopLogRepo) Close() error            { return nil }
 func (noopLogRepo) SQLDB() (*sql.DB, error) { return nil, nil }
 
@@ -169,7 +172,7 @@ func buildEventDrivenService(cfg *config.Config, l2 cache.L2Cache) *IdleService 
 		cfg:      cfg,
 		idleRepo: repo,
 		cacheMgr: mgr,
-		logSvc:   common.NewLogService(nil, nil, nil),
+		logSvc:   common.NewLogService(nil, nil),
 	}
 }
 
@@ -228,7 +231,7 @@ func buildEventDrivenServiceWithDB(t *testing.T, cfg *config.Config, l2 cache.L2
 		businessDB: rw,
 		points:     common.NewPointsOutboxApplier(repository.NewPointsOutboxRepository(gdb), noopUserRepo{}, nil, 0),
 		cacheMgr:   mgr,
-		logSvc:     common.NewLogService(noopLogRepo{}, noopMonitorRepo{}, nil),
+		logSvc:     common.NewLogService(noopLogRepo{}, noopMonitorRepo{}),
 	}
 }
 

@@ -43,7 +43,7 @@ func buildFallbackServiceWithDB(t *testing.T, cfg *config.Config, persistEnabled
 		shopRepo:   repository.NewShopRepositoryWithCache(rw, mgr),
 		businessDB: rw,
 		cacheMgr:   mgr,
-		logSvc:     common.NewLogService(noopLogRepo{}, noopMonitorRepo{}, nil),
+		logSvc:     common.NewLogService(noopLogRepo{}, noopMonitorRepo{}),
 	}
 	if persistEnabled {
 		svc.hbFlusher = NewHeartbeatFlusher(repo, cfg.Idle.HeartbeatPersistIntervalOrDefault(), zap.NewNop())

@@ -171,9 +171,16 @@ type DriverConfig struct {
 	MongoDB       MongoDBConfig       `mapstructure:"mongodb"`
 	Elasticsearch ElasticsearchConfig `mapstructure:"elasticsearch"`
 	ClickHouse    ClickHouseConfig    `mapstructure:"clickhouse"`
-	// Pool 连接池配置（driver 为 mysql / postgres 时生效）。此前 user/monitor/log 三类库的连接池
-	// 写死在适配器默认值（max_open=100），高并发下成为隐性瓶颈且不可调；现改为配置驱动，
-	// 使其与 business 库一样可由运维按容量调整（需求 §6，13 §3.x）。sqlite 路径忽略此配置。
+	// MySQL 子段：当 driver 为 "mysql" 时生效（测试环境常用，与 business 同构的 GORM/MySQL 适配器）。
+	// 使 user/monitor/log 在测试环境可切换到 MySQL，而不必依赖生产用的 MongoDB/ClickHouse/Elasticsearch。
+	// user/monitor/log 切到 MySQL 时的连接池即取自本子段（max_idle_conns 等），由 driverConn 解析。
+	MySQL MySQLConfig `mapstructure:"mysql"`
+	// Pool 连接池配置：仅当 driver 为「网络型 GORM 驱动」且非 mysql 时生效（如未来为 user/monitor/log
+	// 启用 postgres 测试库）。注意两点：
+	//   - driver 为 mysql 时连接池来自上面的 MySQL 子段（mysql.max_idle_conns 等），此处 Pool 不生效；
+	//   - driver 为 sqlite（user/monitor/log 的默认兜底，以及异构后端 mongodb/clickhouse/elasticsearch
+	//     不可用时的回退）时，连接池由 SQLite 适配器硬性设为 1/1（文件型 SQLite 单写者，刻意不可调），
+	//     此处 Pool 同样不生效。故本字段当前对 user/monitor/log 多为占位，真正生效的池配置在 MySQL 子段。
 	Pool DBPoolConfig `mapstructure:"pool"`
 }
 
@@ -820,6 +827,22 @@ func loadFromFile(configPath string) (*Config, error) {
 // Validate 校验配置基本可用性（必填项与取值范围）。
 // 用于启动加载与运行时热更新：校验失败时，热更新保留旧配置不替换，启动则直接报错退出。
 func (c *Config) Validate() error {
+	// 未配置 driver（空字符串）按原语义回退 SQLite：空值属于「未配置」而非「误配」，不应被下方
+	// 白名单判为非法，否则会破坏「未配置即默认 sqlite」的既有契约（Kafka/Manager 等不关心 DB 的
+	// 最小配置测试也会触发校验失败）。仅「显式配置了 driver」才走白名单严格校验。
+	if c.Database.Business.Driver == "" {
+		c.Database.Business.Driver = "sqlite"
+	}
+	if c.Database.User.Driver == "" {
+		c.Database.User.Driver = "sqlite"
+	}
+	if c.Database.Monitor.Driver == "" {
+		c.Database.Monitor.Driver = "sqlite"
+	}
+	if c.Database.Log.Driver == "" {
+		c.Database.Log.Driver = "sqlite"
+	}
+
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port must be in (0, 65535], got %d", c.Server.Port)
 	}
@@ -837,6 +860,37 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.ConcurrencyLimit < 0 {
 		return fmt.Errorf("server.concurrency_limit must be >= 0")
+	}
+
+	// 数据库驱动合法性校验：避免误配 driver 静默回退 SQLite 而掩盖配置错误。
+	// 生产用 PostgreSQL/MongoDB/ClickHouse/Elasticsearch，测试用 MySQL/SQLite（见需求）。
+	if !contains([]string{"mysql", "postgres", "sqlite"}, c.Database.Business.Driver) {
+		return fmt.Errorf("database.business.driver must be one of mysql/postgres/sqlite, got %q", c.Database.Business.Driver)
+	}
+	if !contains([]string{"mongodb", "mysql", "sqlite"}, c.Database.User.Driver) {
+		return fmt.Errorf("database.user.driver must be one of mongodb/mysql/sqlite, got %q", c.Database.User.Driver)
+	}
+	if !contains([]string{"clickhouse", "mysql", "sqlite"}, c.Database.Monitor.Driver) {
+		return fmt.Errorf("database.monitor.driver must be one of clickhouse/mysql/sqlite, got %q", c.Database.Monitor.Driver)
+	}
+	if !contains([]string{"elasticsearch", "mysql", "sqlite"}, c.Database.Log.Driver) {
+		return fmt.Errorf("database.log.driver must be one of elasticsearch/mysql/sqlite, got %q", c.Database.Log.Driver)
+	}
+	// 选 mysql 驱动时必须给出主库 DSN：否则会静默回退到空/sqlite 而掩盖配置错误。
+	if c.Database.Business.Driver == "mysql" && c.Database.Business.MySQL.Master == "" {
+		return fmt.Errorf("database.business.mysql.master must be set when driver=mysql")
+	}
+	if c.Database.Business.Driver == "postgres" && c.Database.Business.Postgres.Master == "" {
+		return fmt.Errorf("database.business.postgres.master must be set when driver=postgres")
+	}
+	if c.Database.User.Driver == "mysql" && c.Database.User.MySQL.Master == "" {
+		return fmt.Errorf("database.user.mysql.master must be set when driver=mysql")
+	}
+	if c.Database.Monitor.Driver == "mysql" && c.Database.Monitor.MySQL.Master == "" {
+		return fmt.Errorf("database.monitor.mysql.master must be set when driver=mysql")
+	}
+	if c.Database.Log.Driver == "mysql" && c.Database.Log.MySQL.Master == "" {
+		return fmt.Errorf("database.log.mysql.master must be set when driver=mysql")
 	}
 
 	// 超时关系合理性（仅当两侧均显式设置时校验；零值视为未配置/测试环境）
@@ -885,4 +939,14 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// contains 判断 s 是否在 list 中（用于驱动白名单校验）。
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

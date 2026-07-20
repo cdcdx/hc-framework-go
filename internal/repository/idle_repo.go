@@ -45,6 +45,9 @@ func NewIdleRepositoryFromTx(tx *gorm.DB) *IdleRepository {
 
 // Create 创建挂机记录（写主库，INSERT ... ON CONFLICT 防并发重复）
 func (r *IdleRepository) Create(ctx context.Context, record *model.IdleRecord) error {
+	if r.rw == nil {
+		return fmt.Errorf("idle repo: rw not initialized")
+	}
 	err := r.rw.Write(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "user_id"}, {Name: "device_id"}, {Name: "status"}},
 		Where:     clause.Where{Exprs: []clause.Expression{clause.Eq{Column: "status", Value: "active"}}},
@@ -96,6 +99,9 @@ func (r *IdleRepository) cachedFindOne(ctx context.Context, cacheKey string, loa
 
 // findOneBy 按条件查询单个活跃记录，NotFound 时返回 nil。
 func (r *IdleRepository) findOneBy(ctx context.Context, query string, args ...interface{}) (*model.IdleRecord, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("idle repo: rw not initialized")
+	}
 	var record model.IdleRecord
 	err := r.rw.Read(ctx).Where(query, args...).First(&record).Error
 	if err != nil {
@@ -109,6 +115,9 @@ func (r *IdleRepository) findOneBy(ctx context.Context, query string, args ...in
 
 // FindActiveAll 查询用户所有活跃会话（读从库）
 func (r *IdleRepository) FindActiveAll(ctx context.Context, userID string) ([]model.IdleRecord, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("idle repo: rw not initialized")
+	}
 	var records []model.IdleRecord
 	err := r.rw.Read(ctx).
 		Where("user_id = ? AND status = ?", userID, "active").
@@ -119,6 +128,9 @@ func (r *IdleRepository) FindActiveAll(ctx context.Context, userID string) ([]mo
 
 // CountActive 统计用户活跃会话数（读从库）
 func (r *IdleRepository) CountActive(ctx context.Context, userID string) (int64, error) {
+	if r.rw == nil {
+		return 0, fmt.Errorf("idle repo: rw not initialized")
+	}
 	var count int64
 	err := r.rw.Read(ctx).Model(&model.IdleRecord{}).
 		Where("user_id = ? AND status = ?", userID, "active").
@@ -136,6 +148,9 @@ func (r *IdleRepository) FindByID(ctx context.Context, id int64) (*model.IdleRec
 
 // Update 更新记录（写主库）
 func (r *IdleRepository) Update(ctx context.Context, record *model.IdleRecord) error {
+	if r.rw == nil {
+		return fmt.Errorf("idle repo: rw not initialized")
+	}
 	err := r.rw.Write(ctx).Save(record).Error
 	if err == nil {
 		r.invalidateActiveCache(ctx, record.UserID)
@@ -244,6 +259,9 @@ func (r *IdleRepository) TouchHeartbeat(ctx context.Context, userID, deviceID st
 
 // updateHeartbeatDB 仅更新主库 last_heartbeat_at，不做任何缓存失效/广播（降级路径使用）
 func (r *IdleRepository) updateHeartbeatDB(ctx context.Context, userID, deviceID string) error {
+	if r.rw == nil {
+		return fmt.Errorf("idle repo: rw not initialized")
+	}
 	now := time.Now()
 	return r.rw.Write(ctx).Model(&model.IdleRecord{}).
 		Where("user_id = ? AND device_id = ? AND status = ?", userID, deviceID, "active").
@@ -370,6 +388,9 @@ type HeartbeatPersistItem struct {
 //
 // 优化：使用 CASE WHEN 构建单条 SQL 批量更新，替代事务内 N 次逐条 UPDATE 的 N 次网络往返。
 func (r *IdleRepository) BatchUpdateHeartbeat(ctx context.Context, items []HeartbeatPersistItem) (int, error) {
+	if r.rw == nil {
+		return 0, fmt.Errorf("idle repo: rw not initialized")
+	}
 	if len(items) == 0 {
 		return 0, nil
 	}
@@ -469,6 +490,9 @@ func (r *IdleRepository) ActiveSetShardCount() int {
 // 与 FindStaleActive 不同：不依赖 DB 的 last_heartbeat_at（心跳已去 DB 化），
 // 由上层逐个校验 Redis 心跳 Key 判定是否超时。百万级场景应改为 Redis 原生扫描（方案 4）。
 func (r *IdleRepository) FindAllActive(ctx context.Context) ([]model.IdleRecord, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("idle repo: rw not initialized")
+	}
 	var records []model.IdleRecord
 	err := r.rw.Read(ctx).
 		Where("status = ?", "active").
@@ -481,6 +505,9 @@ func (r *IdleRepository) FindAllActive(ctx context.Context) ([]model.IdleRecord,
 // before 通常为 now - timeoutThreshold；返回 last_heartbeat_at < before
 // （或从未上报心跳且 start_time < before）且 status='active' 的记录。
 func (r *IdleRepository) FindStaleActive(ctx context.Context, before time.Time) ([]model.IdleRecord, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("idle repo: rw not initialized")
+	}
 	var records []model.IdleRecord
 	err := r.rw.Read(ctx).
 		Where("status = ? AND (last_heartbeat_at < ? OR (last_heartbeat_at IS NULL AND start_time < ?))",
@@ -504,6 +531,9 @@ func (r *IdleRepository) TimeoutIfActive(ctx context.Context, id int64, endTime 
 
 // markSettled 原子地将 active 会话标记为终态，仅当 status='active' 时生效。
 func (r *IdleRepository) markSettled(ctx context.Context, id int64, status string, endTime time.Time, durationSeconds int, pointsEarned int64) (bool, error) {
+	if r.rw == nil {
+		return false, fmt.Errorf("idle repo: rw not initialized")
+	}
 	result := r.rw.Write(ctx).Model(&model.IdleRecord{}).
 		Where("id = ? AND status = ?", id, "active").
 		Updates(map[string]interface{}{
@@ -607,6 +637,9 @@ func LocalDayString() string {
 // 与积分流水/Outbox 同事务提交；根治 getDailyPointsDB 的全表 SUM：改「读单行汇总」为「写时增量维护」。
 // 用 ON CONFLICT DO UPDATE total = total + ? 实现 mysql/postgres/sqlite 跨库幂等增量。
 func (r *IdleRepository) UpsertDailyPoints(ctx context.Context, userID, day string, delta int64) error {
+	if r.rw == nil {
+		return fmt.Errorf("idle repo: rw not initialized")
+	}
 	if delta <= 0 {
 		return nil
 	}
@@ -619,6 +652,9 @@ func (r *IdleRepository) UpsertDailyPoints(ctx context.Context, userID, day stri
 
 // readDailyPointsSummary 读当日汇总单行（O(1)）；行不存在返回 (0,false,nil)。
 func (r *IdleRepository) readDailyPointsSummary(ctx context.Context, userID, day string) (int64, bool, error) {
+	if r.rw == nil {
+		return 0, false, fmt.Errorf("idle repo: rw not initialized")
+	}
 	var row model.IdleDailyPoints
 	err := r.rw.Read(ctx).Model(&model.IdleDailyPoints{}).
 		Where("user_id = ? AND day = ?", userID, day).
@@ -634,6 +670,9 @@ func (r *IdleRepository) readDailyPointsSummary(ctx context.Context, userID, day
 
 // sumDailyPointsDB 旧实现：对 idle_records 做当日全量 SUM（范围扫描，慢）；仅作汇总行缺失时的回退/回填。
 func (r *IdleRepository) sumDailyPointsDB(ctx context.Context, userID string) (int64, error) {
+	if r.rw == nil {
+		return 0, fmt.Errorf("idle repo: rw not initialized")
+	}
 	today := time.Now().Truncate(24 * time.Hour)
 	var total int64
 	err := r.rw.Read(ctx).Model(&model.IdleRecord{}).
@@ -645,6 +684,9 @@ func (r *IdleRepository) sumDailyPointsDB(ctx context.Context, userID string) (i
 
 // upsertDailyPointsSummary 回填汇总行（SET 非增量，用于历史数据一次性回源后持久化，幂等）。
 func (r *IdleRepository) upsertDailyPointsSummary(ctx context.Context, userID, day string, total int64) error {
+	if r.rw == nil {
+		return fmt.Errorf("idle repo: rw not initialized")
+	}
 	row := &model.IdleDailyPoints{UserID: userID, Day: day, Total: total}
 	return r.rw.Write(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "user_id"}, {Name: "day"}},
@@ -658,6 +700,9 @@ func (r *IdleRepository) upsertDailyPointsSummary(ctx context.Context, userID, d
 // ON CONFLICT DO NOTHING 保证仅补「缺失行」，不覆盖结算时增量维护的 running total（幂等、可重复执行）。
 // dayStart 与 sumDailyPointsDB 保持一致（time.Now().Truncate(24h)），确保回填口径与回退 SUM 一致。
 func (r *IdleRepository) BackfillDailyPoints(ctx context.Context, day string) (int64, error) {
+	if r.rw == nil {
+		return 0, fmt.Errorf("idle repo: rw not initialized")
+	}
 	dayStart := time.Now().Truncate(24 * time.Hour)
 	master := r.rw.Master()
 	var sql string
@@ -756,6 +801,9 @@ func endOfLocalDay() time.Duration {
 
 // FindRecords 查询挂机记录（读从库，游标分页）
 func (r *IdleRepository) FindRecords(ctx context.Context, userID string, cursor int64, limit int) ([]model.IdleRecord, error) {
+	if r.rw == nil {
+		return nil, fmt.Errorf("idle repo: rw not initialized")
+	}
 	if limit <= 0 {
 		limit = 20
 	}
@@ -777,6 +825,9 @@ func (r *IdleRepository) FindRecords(ctx context.Context, userID string, cursor 
 
 // AutoMigrate 自动迁移（DDL 操作主库）
 func (r *IdleRepository) AutoMigrate() error {
+	if r.rw == nil {
+		return fmt.Errorf("idle repo: rw not initialized")
+	}
 	return r.rw.Master().AutoMigrate(&model.IdleRecord{})
 }
 
@@ -784,6 +835,9 @@ func (r *IdleRepository) AutoMigrate() error {
 // SQLite: 使用部分唯一索引 (WHERE status='active')
 // MySQL:   不支持部分唯一索引，使用生成列模拟：当 status='active' 时生成唯一键，非 active 时为 NULL（MySQL UNIQUE 索引允许多个 NULL）
 func (r *IdleRepository) EnsureUniqueIndex() error {
+	if r.rw == nil {
+		return fmt.Errorf("idle repo: rw not initialized")
+	}
 	switch r.rw.Master().Dialector.Name() {
 	case "mysql":
 		master := r.rw.Master()

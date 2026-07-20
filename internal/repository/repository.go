@@ -14,6 +14,9 @@ type LogRepo interface {
 	FindByUser(ctx context.Context, userID string, cursor int64, limit int) ([]model.AuditLog, error)
 	FindByType(ctx context.Context, eventType string, start, end time.Time, limit int) ([]model.AuditLog, error)
 	CountByType(ctx context.Context, eventType string, start, end time.Time) (int64, error)
+	// CountByTypeAndResult 统计某事件类型在 [start,end] 内、且 login_result=result 的行数；
+	// result 为空时等价于 CountByType。合并 login_records 后用于区分成功/失败登录。ES 驱动不支持，返回错误。
+	CountByTypeAndResult(ctx context.Context, eventType, result string, start, end time.Time) (int64, error)
 	// SQLDB 返回底层 *sql.DB（仅 GORM/SQLite 实现可用；ES 实现返回 error）。
 	// 用于监控采集连接池统计（metrics.RegisterDBPool）。
 	SQLDB() (*sql.DB, error)

@@ -129,7 +129,7 @@ func NewKafkaConsumer(cfg *config.KafkaConfig, log Logger) (*KafkaConsumer, erro
 	case "", "direct":
 		// 默认无消费组直读模式，继续
 	case "group":
-		return nil, fmt.Errorf("kafka: consumer.mode=group is unsupported under Kafka 4.0 KRaft with kafka-go v0.4.51 (group coordinator returns UNKNOWN_SERVER_ERROR(-1)); use 'direct' (no-group per-partition read). See 13 §6.5")
+		return nil, fmt.Errorf("kafka: consumer.mode=group is unsupported under Kafka 4.0 KRaft with kafka-go v0.4.51 (group coordinator returns UNKNOWN_SERVER_ERROR(-1)); use 'direct' (no-group per-partition read).")
 	default:
 		log.Warnf("kafka: unknown consumer.mode=%q, falling back to 'direct' (no-group per-partition read)", cfg.Consumer.Mode)
 	}
@@ -337,7 +337,7 @@ func (c *KafkaConsumer) Subscribe(ctx context.Context, topics []string, handler 
 	// 多连接开销告警（见 13 §6.5 #8）：每个 (topic, partition) 一个 Reader 一个 broker TCP 连接，
 	// 分区多时连接数=分区数。超过阈值时提示考虑合并分区或迁移消费组；connection_warn_threshold<=0 不告警。
 	if thr := cc.ConnectionWarnThreshold; thr > 0 && len(readers) > thr {
-		c.log.Warnf("kafka consumer has %d readers (one broker TCP connection each); high connection count may pressure the broker. Consider consolidating partitions or migrating to consumer group (see 13 §6.5 #8)", len(readers))
+		c.log.Warnf("kafka consumer has %d readers (one broker TCP connection each); high connection count may pressure the broker. Consider consolidating partitions or migrating to consumer group", len(readers))
 	}
 
 	// 消费 lag 可观测（见 13 §6.5 / §3.59）：后台周期读取各 reader 的 Stats().Lag / Offset，
@@ -828,6 +828,6 @@ func (c *KafkaConsumer) warnStartFromLatestIfOffsetExists(offsetPath string) {
 		return
 	}
 	if _, err := os.Stat(offsetPath); err == nil {
-		c.log.Warnf("kafka: start_from_latest=true has NO effect: offset file %q already exists, resume from processed offset (not skipping backlog). To skip backlog, delete the offset file and restart (see 13 §6.5 #6)", offsetPath)
+		c.log.Warnf("kafka: start_from_latest=true has NO effect: offset file %q already exists, resume from processed offset (not skipping backlog). To skip backlog, delete the offset file and restart", offsetPath)
 	}
 }

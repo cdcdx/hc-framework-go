@@ -272,8 +272,9 @@ groups:
           summary: "打开 FD 占比 > 85%"
           description: "process_open_fds/process_max_fds = {{ $value | humanizePercentage }}。连接 / 文件句柄未释放，逼近 ulimit，谨慎 FD 耗尽导致新连接失败。"
 
-  # 数据库（业务/用户/监控/日志/登录）连接池告警：直接观测「连接池/行锁饱和」这一头号容量风险
-  # （对应抢购 10309 超时）。指标由 metrics.RegisterDBPool 注入，标签 db ∈ {business,user,monitor,log,login_record}；
+  # 数据库（业务/用户/监控/日志）连接池告警：直接观测「连接池/行锁饱和」这一头号容量风险
+  # （对应抢购 10309 超时）。指标由 metrics.RegisterDBPool 注入，标签 db ∈ {business,user,monitor,log}
+  # （登录审计已合并进 log 库的 audit_logs，无独立 login_record 库）；
   # mongodb/clickhouse/elasticsearch 驱动无 *sql.DB，自动跳过（不产生该 db 序列）。
   - name: hc-framework-db
     rules:

@@ -56,6 +56,9 @@ func (r *EventDedupRepository) Mark(tx *gorm.DB, eventID, source string) (bool, 
 // 幂等事件的 event_id 派生自业务主键，相同事件在 retention 窗口后已不可能重放，
 // 因此按 created_at 过期清理是安全的。返回被删除的行数。
 func (r *EventDedupRepository) DeleteBefore(ctx context.Context, before time.Time) (int64, error) {
+	if r.rw == nil {
+		return 0, nil // rw 可 nil（仅事务内 Mark）：无连接则无记录可删，视为已清理完成
+	}
 	result := r.rw.Write(ctx).
 		Where("created_at < ?", before).
 		Delete(&model.EventDedup{})

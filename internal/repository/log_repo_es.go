@@ -28,6 +28,9 @@ func NewESLogRepository(adapter *db.ElasticsearchAdapter) *ESLogRepository {
 
 // Close 关闭 Elasticsearch 连接（转发到 adapter；adapter.Close 释放底层 transport 连接池）。
 func (r *ESLogRepository) Close() error {
+	if r.adapter == nil {
+		return nil // 与读/写路径 nil-adapter 守卫一致，避免 shutdown 时 panic
+	}
 	return r.adapter.Close()
 }
 
@@ -166,4 +169,9 @@ func (r *ESLogRepository) FindByType(ctx context.Context, eventType string, star
 // CountByType ES 暂不支持
 func (r *ESLogRepository) CountByType(ctx context.Context, eventType string, start, end time.Time) (int64, error) {
 	return 0, fmt.Errorf("CountByType not supported on Elasticsearch, use SQLite driver for queries")
+}
+
+// CountByTypeAndResult ES 暂不支持
+func (r *ESLogRepository) CountByTypeAndResult(ctx context.Context, eventType, result string, start, end time.Time) (int64, error) {
+	return 0, fmt.Errorf("CountByTypeAndResult not supported on Elasticsearch, use SQLite driver for queries")
 }

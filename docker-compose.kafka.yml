@@ -3,10 +3,7 @@
 # ------------------------------------------------------------
 # 重要说明：本项目当前默认运行环境为 Kafka 4.0 KRaft（如本机
 # bitnamilegacy/kafka:4.0.0）。由于 kafka-go v0.4.51 的 group coordinator 协议
-# 与 KRaft 4.0 不兼容（带 GroupID 时 FetchMessage 返回 UNKNOWN_SERVER_ERROR(-1)，
-# 详见 docs/603_代码优化记录.md §6.5），消费者已显式声明为「无消费组 + 按分区直读」
-# （mq.kafka.consumer.mode: "direct"，见 §6.5 / §3.60「配置收敛」）。-1 Unknown 已由
-# 该直读模式在应用层规避，本 compose 文件【不再是】消除 -1 Unknown 的必要手段。
+# 与 KRaft 4.0 不兼容（带 GroupID 时 FetchMessage 返回 UNKNOWN_SERVER_ERROR(-1)，消费者已显式声明为「无消费组 + 按分区直读」
 #
 # 本文件保留为「可选回退」：
 #   - 若你的开发环境没有 4.0 KRaft、或想用 ZK 模式验证消费组行为，可用它起 3.5 ZK。

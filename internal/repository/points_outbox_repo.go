@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -22,6 +23,9 @@ func NewPointsOutboxRepository(db *gorm.DB) *PointsOutboxRepository {
 // AutoMigrate 自动迁移（DDL 操作主库），与 Idle/Shop/Task 仓储保持一致，
 // 使本仓储自描述其表结构；启动时亦由 businessModels 统一 AutoMigrate 覆盖。
 func (r *PointsOutboxRepository) AutoMigrate() error {
+	if r.db == nil {
+		return fmt.Errorf("points outbox repo: db not initialized")
+	}
 	return r.db.AutoMigrate(&model.PointsOutbox{})
 }
 
@@ -34,6 +38,9 @@ func (r *PointsOutboxRepository) AppendInTx(tx *gorm.DB, rec *model.PointsOutbox
 // Claim 将 pending 记录原子置为 processing，仅一个竞争者成功（行级状态条件更新）。
 // 返回 claimed=true 表示本次负责应用该条积分调整。
 func (r *PointsOutboxRepository) Claim(ctx context.Context, eventID string) (bool, error) {
+	if r.db == nil {
+		return false, fmt.Errorf("points outbox repo: db not initialized")
+	}
 	res := r.db.WithContext(ctx).Model(&model.PointsOutbox{}).
 		Where("event_id = ? AND status = ?", eventID, model.OutboxStatusPending).
 		Updates(map[string]interface{}{
@@ -48,6 +55,9 @@ func (r *PointsOutboxRepository) Claim(ctx context.Context, eventID string) (boo
 
 // MarkDone 标记已成功应用到 userDB，认领者才能置为 done。
 func (r *PointsOutboxRepository) MarkDone(ctx context.Context, eventID string) error {
+	if r.db == nil {
+		return fmt.Errorf("points outbox repo: db not initialized")
+	}
 	return r.db.WithContext(ctx).Model(&model.PointsOutbox{}).
 		Where("event_id = ? AND status = ?", eventID, model.OutboxStatusProcessing).
 		Updates(map[string]interface{}{
@@ -59,6 +69,9 @@ func (r *PointsOutboxRepository) MarkDone(ctx context.Context, eventID string) e
 // Requeue 应用失败后释放回 pending，交由 relay / 消费者重试（仍限制在 processing 态才能回退，
 // 避免覆盖已被其他竞争者认领的记录）。
 func (r *PointsOutboxRepository) Requeue(ctx context.Context, eventID string) error {
+	if r.db == nil {
+		return fmt.Errorf("points outbox repo: db not initialized")
+	}
 	return r.db.WithContext(ctx).Model(&model.PointsOutbox{}).
 		Where("event_id = ? AND status = ?", eventID, model.OutboxStatusProcessing).
 		Updates(map[string]interface{}{
@@ -70,6 +83,9 @@ func (r *PointsOutboxRepository) Requeue(ctx context.Context, eventID string) er
 // PendingOlderThan 返回 pending 且创建时间早于 before 的记录（供 relay 重试，grace 避免与
 // 正在进行的同步快路径争用刚写入的记录）。
 func (r *PointsOutboxRepository) PendingOlderThan(ctx context.Context, before time.Time, limit int) ([]model.PointsOutbox, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("points outbox repo: db not initialized")
+	}
 	var rows []model.PointsOutbox
 	if limit <= 0 {
 		limit = 200

@@ -128,7 +128,7 @@ func (r *CHMonitorRepository) CountByType(ctx context.Context, metricType string
 	}
 	sql := fmt.Sprintf(`
 		SELECT COUNT(*) FROM %s.monitor_metrics
-		WHERE metric_type = ? AND created_at BETWEEN ? AND ?
+		WHERE metric_type = ? AND created_at >= ? AND created_at < ?
 	`, r.dbName)
 
 	var count uint64
@@ -140,7 +140,7 @@ func (r *CHMonitorRepository) CountByType(ctx context.Context, metricType string
 func (r *CHMonitorRepository) SumByType(ctx context.Context, metricType string, start, end time.Time) (float64, error) {
 	sql := fmt.Sprintf(`
 		SELECT COALESCE(SUM(value), 0) FROM %s.monitor_metrics
-		WHERE metric_type = ? AND created_at BETWEEN ? AND ?
+		WHERE metric_type = ? AND created_at >= ? AND created_at < ?
 	`, r.dbName)
 
 	var sum float64
@@ -157,7 +157,7 @@ func (r *CHMonitorRepository) FindByTimeRange(ctx context.Context, start, end ti
 	sql := fmt.Sprintf(`
 		SELECT id, user_id, metric_type, metric_name, value, tags, created_at
 		FROM %s.monitor_metrics
-		WHERE created_at BETWEEN ? AND ?
+		WHERE created_at >= ? AND created_at < ?
 		ORDER BY created_at DESC
 		LIMIT ?
 	`, r.dbName)

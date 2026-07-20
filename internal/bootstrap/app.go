@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"github.com/cdcdx/hc-framework-go/internal/service/auth"
 	"github.com/cdcdx/hc-framework-go/internal/service/common"
@@ -85,11 +84,11 @@ type App struct {
 
 // Run 应用入口：加载配置 → 初始化 → 启动后台任务与 HTTP 服务 → 阻塞至信号 → 优雅关闭。
 // 返回进程退出码：0 正常退出，1 启动或运行期致命错误。
-func Run() int {
-	configPath := flag.String("config", "config/config.yaml", "配置文件路径")
-	flag.Parse()
-
-	a, err := newApp(*configPath)
+// Run 应用入口：加载配置 → 初始化 → 启动后台任务与 HTTP 服务 → 阻塞至信号 → 优雅关闭。
+// 返回进程退出码：0 正常退出，1 启动或运行期致命错误。
+// configPath 由 main 解析命令行后传入（flag 解析统一收敛到 main，避免重复/顺序冲突）。
+func Run(configPath string) int {
+	a, err := newApp(configPath)
 	if err != nil {
 		// 配置加载在 logger 初始化前失败，已在 newApp 内打印到 stderr
 		return 1
@@ -304,7 +303,7 @@ func (a *App) initServices(bgCtx context.Context) error {
 }
 
 func (a *App) initLogService() {
-	logSvc := common.NewLogService(a.dbs.LogRepo, a.dbs.MonitorRepo, a.dbs.LoginRepo)
+	logSvc := common.NewLogService(a.dbs.LogRepo, a.dbs.MonitorRepo)
 	a.logSvc = logSvc
 }
 
