@@ -131,6 +131,14 @@ func (b *producerBase) drainMessage(ctx context.Context, msg *event.Message) {
 // requeue 在熔断打开时把消息放回队列尾部等待恢复，避免不必要地降级 DLQ。
 // 队列满（内存缓冲已达上限）时改为降级 DLQ 由 replay 补偿，防止消息在内存无限堆积。
 func (b *producerBase) requeue(msg *event.Message) {
+	// 熔断已打开（broker 持续不可达）：重新入队只会被立刻再次 publish 失败，制造「入队→Send
+	// 失败→再入队」的无效风暴，最终打满队列/溢出池（见 2026-07-20 日志：queue full and
+	// overflow workers saturated）。broker 恢复后 replayLoop 会从 DLQ 重放，故此处直接降级
+	// DLQ，既消除风暴又不丢消息；仅在熔断器半开探测（StateHalfOpen）时才给一次重试机会。
+	if b.breaker != nil && b.breaker.State() == gobreaker.StateOpen {
+		b.fallbackToDLQ(msg, errBreakerOpen)
+		return
+	}
 	// 短暂退避：避免 broker 持续不可达时忙等打满 CPU，也给 broker 恢复、熔断器进入
 	// 半开探测留出时间；退避远小于 breaker Timeout，恢复后的感知延迟可忽略。
 	sleepWithContext(context.Background(), requeueBackoff)

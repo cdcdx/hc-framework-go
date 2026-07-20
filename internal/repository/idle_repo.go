@@ -583,8 +583,9 @@ func (r *IdleRepository) InvalidateActiveByUser(ctx context.Context, userID, dev
 }
 
 // GetDailyPoints 获取用户当日已累计的挂机积分。
-// 优先读 Redis 计数器（O(1)，由 IncrDailyPoints 维护）；未命中（冷启动/Redis 故障）回退 DB SUM 并回填。
-// L2 不可用时直接 DB SUM。百万级结算下，把「每次结算一次全表 SUM 扫描」降为「O(1) 读取 + 偶发回填」。
+// 优先读 Redis 计数器（O(1)，由 AcquireDailyPoints 预占时维护）；未命中（冷启动/Redis 故障）
+// 回退 getDailyPointsDB 读 idle_daily_points 单行汇总（O(1)）。汇总行缺失直接返回 0，
+// 不再做全表 SUM（避免结算热路径的 N 次范围扫描风暴）。L2 不可用时同理走 DB 单行汇总。
 func (r *IdleRepository) GetDailyPoints(ctx context.Context, userID string) (int64, error) {
 	if r.cacheMgr != nil && r.cacheMgr.L2 != nil {
 		if v, ok, err := r.cacheMgr.L2.Get(ctx, r.dailyPointsKey(userID)); err == nil && ok {
@@ -592,13 +593,12 @@ func (r *IdleRepository) GetDailyPoints(ctx context.Context, userID string) (int
 				return n, nil
 			}
 		}
-		// 冷启动/缓存未命中：从 DB 计算并回填，后续结算直接走 Redis 计数（TTL 至当日结束+1h）。
+		// 冷启动/缓存未命中：从 DB 单行汇总回源（O(1)），后续结算直接走 Redis 计数（TTL 至当日结束+1h）。
 		dbVal, dbErr := r.getDailyPointsDB(ctx, userID)
 		if dbErr == nil {
 			_ = r.cacheMgr.L2.Set(ctx, r.dailyPointsKey(userID), dbVal, endOfLocalDay())
 		} else {
-			// DB 冷启动回源失败：Redis 计数无法预热，但结算主流程仍可走 DB SUM。
-			// 仅记指标不抛错；持续上升表示 DB 抖动。
+			// DB 回源失败：Redis 计数无法预热，但结算主流程仍可走 DB 单行汇总。仅记指标不抛错。
 			metrics.IdleRepoErrorsTotal.WithLabelValues("get_daily_points_db").Inc()
 		}
 		return dbVal, dbErr
@@ -607,24 +607,27 @@ func (r *IdleRepository) GetDailyPoints(ctx context.Context, userID string) (int
 }
 
 // getDailyPointsDB 读取用户当日已得挂机积分（降级/回填用）。
-// 改为读 idle_daily_points 单行汇总（O(1)），彻底去掉对 idle_records 的 SUM 范围扫描。
-// 汇总行不存在（历史数据/新用户首笔）时回退一次全表 SUM 并回填汇总行，使后续回源均为 O(1)，
-// 把「每次结算一次全表 SUM」收敛为「每用户每天至多一次 SUM」（根治 p99 长尾的隐性放大器）。
+// 读 idle_daily_points 单行汇总（O(1)，彻底去掉对 idle_records 的 SUM 范围扫描）。
+// 汇总行缺失时直接返回 0（不回退全表 SUM）：idle_daily_points 已由 UpsertDailyPoints
+// （每次结算增量维护，idle_service.go:644）与 BackfillDailyPoints（每分钟+启动回填）保持为
+// 权威单行汇总，缺失即代表「今日实得=0」，从 0 起封顶不会超发（封顶上限即日限额）。
+// 这样消除了「每个用户当天首笔结算因汇总行尚未建立而各跑一次全表 SUM」的 N 次范围扫描风暴
+// （见 2026-07-20 慢 SQL 日志：197 条批量结算触发 197 次 200~790ms 的
+// SUM(points_earned) ... WHERE user_id=? AND created_at>=今日）。全表 SUM 仅保留在
+// BackfillDailyPoints 的单条 INSERT...SELECT GROUP BY 中（批量、非逐用户），不再出现在结算热路径。
 func (r *IdleRepository) getDailyPointsDB(ctx context.Context, userID string) (int64, error) {
 	day := LocalDayString()
 	if v, ok, err := r.readDailyPointsSummary(ctx, userID, day); err == nil {
 		if ok {
 			return v, nil
 		}
-		// 汇总行缺失：回退全表 SUM 并回填（一次性），避免后续每次回源都扫全表。
-		dbVal, dbErr := r.sumDailyPointsDB(ctx, userID)
-		if dbErr == nil {
-			_ = r.upsertDailyPointsSummary(ctx, userID, day, dbVal)
-		}
-		return dbVal, dbErr
+		// 汇总行缺失：不在结算热路径做全表 SUM（避免日初/Redis 清空时的 N 次范围扫描风暴），
+		// 直接返回 0；BackfillDailyPoints 会在 1 分钟内补齐该行，UpsertDailyPoints 也会在结算后写入。
+		return 0, nil
 	}
-	// 汇总表读失败：降级为全表 SUM（保留旧行为，不阻断结算）。
-	return r.sumDailyPointsDB(ctx, userID)
+	// 汇总表读失败：同样避免全表 SUM 拖垮结算（best-effort），返回 0 由 Backfill 兜底修正。
+	metrics.IdleRepoErrorsTotal.WithLabelValues("read_daily_points_summary").Inc()
+	return 0, nil
 }
 
 // LocalDayString 返回本地时区当日日期串 "2006-01-02"，与 Redis 每日计数器边界（endOfLocalDay）一致。
@@ -668,37 +671,14 @@ func (r *IdleRepository) readDailyPointsSummary(ctx context.Context, userID, day
 	return row.Total, true, nil
 }
 
-// sumDailyPointsDB 旧实现：对 idle_records 做当日全量 SUM（范围扫描，慢）；仅作汇总行缺失时的回退/回填。
-func (r *IdleRepository) sumDailyPointsDB(ctx context.Context, userID string) (int64, error) {
-	if r.rw == nil {
-		return 0, fmt.Errorf("idle repo: rw not initialized")
-	}
-	today := time.Now().Truncate(24 * time.Hour)
-	var total int64
-	err := r.rw.Read(ctx).Model(&model.IdleRecord{}).
-		Where("user_id = ? AND created_at >= ?", userID, today).
-		Select("COALESCE(SUM(points_earned), 0)").
-		Scan(&total).Error
-	return total, err
-}
-
-// upsertDailyPointsSummary 回填汇总行（SET 非增量，用于历史数据一次性回源后持久化，幂等）。
-func (r *IdleRepository) upsertDailyPointsSummary(ctx context.Context, userID, day string, total int64) error {
-	if r.rw == nil {
-		return fmt.Errorf("idle repo: rw not initialized")
-	}
-	row := &model.IdleDailyPoints{UserID: userID, Day: day, Total: total}
-	return r.rw.Write(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "user_id"}, {Name: "day"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{"total": total}),
-	}).Create(row).Error
-}
-
 // BackfillDailyPoints 批量回填当日积分汇总（根治 getDailyPointsDB 的日初全表 SUM 风暴）。
-// 用单条 INSERT...SELECT GROUP BY 一次性算出所有用户当日总额并写入 idle_daily_points，
+// 用单条 INSERT...SELECT GROUP BY 一次性算出用户当日总额并写入 idle_daily_points，
 // 替代「每个用户首笔查询各做一次全表 SUM」的 N 次范围扫描；之后读路径均走单行 O(1)。
-// ON CONFLICT DO NOTHING 保证仅补「缺失行」，不覆盖结算时增量维护的 running total（幂等、可重复执行）。
-// dayStart 与 sumDailyPointsDB 保持一致（time.Now().Truncate(24h)），确保回填口径与回退 SUM 一致。
+// 关键优化：LEFT JOIN idle_daily_points 反连接，仅聚合「尚无当日汇总行」的用户，
+// 避免每分钟对当日全部 idle_records 做全量 GROUP BY（大表下从扫全表降到仅扫新用户）。
+// 因 ON CONFLICT DO NOTHING / ON DUPLICATE KEY UPDATE total=total 从不覆盖已有行，
+// 反连接过滤与「全量聚合后只插缺失行」完全等价，且不修正任何既有 total（无回归）。
+// dayStart 取当日 0 点（time.Now().Truncate(24h)），与 getDailyPointsDB 的当日口径一致。
 func (r *IdleRepository) BackfillDailyPoints(ctx context.Context, day string) (int64, error) {
 	if r.rw == nil {
 		return 0, fmt.Errorf("idle repo: rw not initialized")
@@ -709,26 +689,30 @@ func (r *IdleRepository) BackfillDailyPoints(ctx context.Context, day string) (i
 	switch master.Dialector.Name() {
 	case "mysql":
 		sql = `INSERT INTO idle_daily_points (user_id, day, total)
-			SELECT user_id, ? as day, COALESCE(SUM(points_earned), 0) as total
-			FROM idle_records
-			WHERE created_at >= ?
-			GROUP BY user_id
+			SELECT t.user_id, ? as day, COALESCE(SUM(t.points_earned), 0) as total
+			FROM idle_records t
+			LEFT JOIN idle_daily_points d ON d.user_id = t.user_id AND d.day = ?
+			WHERE t.created_at >= ? AND d.user_id IS NULL
+			GROUP BY t.user_id
 			ON DUPLICATE KEY UPDATE total = total`
 	case "postgres":
 		sql = `INSERT INTO idle_daily_points (user_id, day, total)
-			SELECT user_id, ? as day, COALESCE(SUM(points_earned), 0) as total
-			FROM idle_records
-			WHERE created_at >= ?
-			GROUP BY user_id
+			SELECT t.user_id, ? as day, COALESCE(SUM(t.points_earned), 0) as total
+			FROM idle_records t
+			LEFT JOIN idle_daily_points d ON d.user_id = t.user_id AND d.day = ?
+			WHERE t.created_at >= ? AND d.user_id IS NULL
+			GROUP BY t.user_id
 			ON CONFLICT (user_id, day) DO NOTHING`
 	default: // sqlite
 		sql = `INSERT OR IGNORE INTO idle_daily_points (user_id, day, total)
-			SELECT user_id, ? as day, COALESCE(SUM(points_earned), 0) as total
-			FROM idle_records
-			WHERE created_at >= ?
-			GROUP BY user_id`
+			SELECT t.user_id, ? as day, COALESCE(SUM(t.points_earned), 0) as total
+			FROM idle_records t
+			LEFT JOIN idle_daily_points d ON d.user_id = t.user_id AND d.day = ?
+			WHERE t.created_at >= ? AND d.user_id IS NULL
+			GROUP BY t.user_id`
 	}
-	res := master.WithContext(ctx).Exec(sql, day, dayStart)
+	// 参数顺序：? as day、d.day = ?、created_at >= ?
+	res := master.WithContext(ctx).Exec(sql, day, day, dayStart)
 	if res.Error != nil {
 		return 0, res.Error
 	}
@@ -755,9 +739,14 @@ func (r *IdleRepository) AcquireDailyPoints(ctx context.Context, userID string, 
 	if r.cacheMgr == nil || r.cacheMgr.L2 == nil || limit <= 0 {
 		return want, nil
 	}
-	// 预热：L2 中计数不存在时，先从 DB SUM 回填，使预占基于真实已发放量。
-	if _, ok, _ := r.cacheMgr.L2.Get(ctx, r.dailyPointsKey(userID)); !ok {
-		_, _ = r.GetDailyPoints(ctx, userID)
+	// 预热（去冗余）：GetDailyPoints 内部已做 L2.Get —— 命中即返回，未命中则从 idle_daily_points
+	// 单行汇总回源并 Set（O(1)），无需在外层再额外发一次 Get 探测 key 是否存在。汇总行缺失即返回 0
+	// （已由 UpsertDailyPoints 增量维护 + BackfillDailyPoints 兜底），结算热路径绝不做全表 SUM。
+	// 预热保证预占基于当日真实已发放量，避免冷 key 从 0 起封顶导致超发。
+	if _, err := r.GetDailyPoints(ctx, userID); err != nil {
+		// 预热失败不阻断结算：TryAcquireDailyPoints 的 Lua 在 key 缺失时从 0 起按日限额封顶，
+		// 至多授予日限额，不会超发；BackfillDailyPoints 兜底修正。仅记指标（GetDailyPoints 内已记过一次）。
+		metrics.IdleRepoErrorsTotal.WithLabelValues("acquire_prewarm").Inc()
 	}
 	return r.cacheMgr.TryAcquireDailyPoints(ctx, userID, want, limit)
 }

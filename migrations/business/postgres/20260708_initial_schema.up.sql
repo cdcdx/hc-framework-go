@@ -28,6 +28,8 @@ CREATE INDEX IF NOT EXISTS idx_idle_status_hb ON idle_records(status, last_heart
 CREATE INDEX IF NOT EXISTS idx_idle_user_created ON idle_records(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_idle_user_device_status ON idle_records(user_id, device_id, status);
 CREATE INDEX IF NOT EXISTS idx_idle_user_status ON idle_records(user_id, status);
+-- 覆盖索引：加速「当日已得挂机积分」范围聚合（user_id + created_at 过滤 + points_earned 覆盖），走索引-only 扫描避免回表随机 IO。
+CREATE INDEX IF NOT EXISTS idx_idle_user_created_pts ON idle_records(user_id, created_at, points_earned);
 
 -- --------------------------------------------------
 -- 1.1 每日挂机积分汇总表（根治 getDailyPointsDB 的全表 SUM 慢查询）
