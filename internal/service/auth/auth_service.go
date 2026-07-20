@@ -726,3 +726,6 @@ var (
 	ErrTokenInvalid       = fmt.Errorf("invalid token")
 	ErrOAuthFailed        = fmt.Errorf("google oauth failed")
 )
+
+// 编译期断言：cache.Manager 实现 TokenBlacklister 接口
+var _ TokenBlacklister = (*cache.Manager)(nil)
