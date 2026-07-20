@@ -1,7 +1,6 @@
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 import { Trend, Rate, Counter, Gauge } from 'k6/metrics';
-import { createHash } from 'k6/crypto';
 
 // ============================================
 // 积分商城压测：商品兑换（抢购场景）
@@ -88,20 +87,19 @@ export function setup() {
     const regFail = {};           // status -> count
     let regSampleBody = '';       // 一条失败样本 body
     let parseFail = 0;
-    const baseTs = Date.now();
     for (let start = 0; start < POOL_SIZE; start += BATCH) {
         const end = Math.min(start + BATCH, POOL_SIZE);
         const regRequests = [];
         const emails = [];
         for (let i = start; i < end; i++) {
-            const email = `shop_${baseTs}_${i}@example.com`;
+            const email = makeEmail('shop', i);
             emails.push(email);
             regRequests.push({
                 method: 'POST',
                 url: `${BASE_URL}/api/v1/auth/register`,
                 body: JSON.stringify({
                     email: email,
-                    password: sha256('TestPass123!'),
+                    password: passwordHash(),
                 }),
                 params: { headers: { 'Content-Type': 'application/json' } },
             });
@@ -335,8 +333,3 @@ export function handleSummary(data) {
     };
 }
 
-function sha256(str) {
-    const hasher = createHash('sha256');
-    hasher.update(str);
-    return hasher.digest('hex');
-}

@@ -42,6 +42,8 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		switch err {
 		case auth.ErrEmailRegistered:
 			response.Error(c, model.CodeEmailRegistered)
+		case auth.ErrServerBusy:
+			response.ServiceUnavailable(c, model.CodeServiceUnavailable)
 		default:
 			response.Error(c, model.CodeUnknownError, err.Error())
 		}
@@ -88,6 +90,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			response.Error(c, model.CodePasswordWrong)
 		case auth.ErrAccountLocked:
 			response.Error(c, model.CodeAccountLocked)
+		case auth.ErrServerBusy:
+			response.ServiceUnavailable(c, model.CodeServiceUnavailable)
 		default:
 			response.Error(c, model.CodeUnknownError, err.Error())
 		}
@@ -128,6 +132,8 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		switch err {
 		case auth.ErrInvalidCredentials:
 			response.Error(c, model.CodePasswordWrong, "old password incorrect")
+		case auth.ErrServerBusy:
+			response.ServiceUnavailable(c, model.CodeServiceUnavailable)
 		default:
 			response.Error(c, model.CodeUnknownError, err.Error())
 		}

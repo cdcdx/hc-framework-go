@@ -1,7 +1,7 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Trend, Rate, Counter } from 'k6/metrics';
-import { createHash } from 'k6/crypto';
+import { makeEmail, passwordHash } from './accounts.js';
 
 // ============================================
 // 场景 4 — 混合负载压测
@@ -59,14 +59,14 @@ export function setup() {
     const regRequests = [];
     const emails = [];
     for (let i = 0; i < POOL_SIZE; i++) {
-        const email = `mixed_${Date.now()}_${i}@example.com`;
+        const email = makeEmail('mixed', i);
         emails.push(email);
         regRequests.push({
             method: 'POST',
             url: `${BASE_URL}/api/v1/auth/register`,
             body: JSON.stringify({
                 email: email,
-                password: sha256('TestPass123!'),
+                password: passwordHash(),
             }),
             params: { headers: { 'Content-Type': 'application/json' } },
         });
@@ -284,8 +284,4 @@ export function handleSummary(data) {
     };
 }
 
-function sha256(str) {
-    const hasher = createHash('sha256');
-    hasher.update(str);
-    return hasher.digest('hex');
-}
+

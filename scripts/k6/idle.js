@@ -1,7 +1,7 @@
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 import { Trend, Rate } from 'k6/metrics';
-import { createHash } from 'k6/crypto';
+import { makeEmail, passwordHash } from './accounts.js';
 
 // ============================================
 // 挂机模块压测：心跳上报
@@ -76,14 +76,14 @@ export function setup() {
     const regRequests = [];
     const emails = [];
     for (let i = 0; i < POOL_SIZE; i++) {
-        const email = `idle_${Date.now()}_${i}@example.com`;
+        const email = makeEmail('idle', i);
         emails.push(email);
         regRequests.push({
             method: 'POST',
             url: `${BASE_URL}/api/v1/auth/register`,
             body: JSON.stringify({
                 email: email,
-                password: sha256('TestPass123!'),
+                password: passwordHash(),
             }),
             // 注意：k6 的 http.batch 请求对象不识别顶层 headers，必须放在 params.headers 下，
             // 否则 Authorization/Content-Type 等请求头不会真正发送。
@@ -237,8 +237,4 @@ function isAlive(r) {
     }
 }
 
-function sha256(str) {
-    const hasher = createHash('sha256');
-    hasher.update(str);
-    return hasher.digest('hex');
-}
+

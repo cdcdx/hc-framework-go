@@ -1,7 +1,10 @@
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 import { Trend, Rate, Counter, Gauge } from 'k6/metrics';
-import { createHash } from 'k6/crypto';
+import { makeEmail, passwordHash } from './accounts.js';
+
+// 仅用于 WS 指标分组名，便于区分不同运行（与账号无关，账号统一走 accounts.js）
+const baseTs = Date.now();
 
 // ============================================
 // 定时抢购压测：/api/v1/shop/flash/redeem
@@ -123,20 +126,19 @@ export function setup() {
     const regFail = {};
     let regSampleBody = '';
     let parseFail = 0;
-    const baseTs = Date.now();
     for (let start = 0; start < POOL_SIZE; start += BATCH) {
         const end = Math.min(start + BATCH, POOL_SIZE);
         const regRequests = [];
         const emails = [];
         for (let i = start; i < end; i++) {
-            const email = `flash_${baseTs}_${i}@example.com`;
+            const email = makeEmail('flash', i);
             emails.push(email);
             regRequests.push({
                 method: 'POST',
                 url: `${BASE_URL}/api/v1/auth/register`,
                 body: JSON.stringify({
                     email: email,
-                    password: sha256('TestPass123!'),
+                    password: passwordHash(),
                 }),
                 params: { headers: { 'Content-Type': 'application/json' } },
             });
@@ -449,8 +451,4 @@ export function handleSummary(data) {
         };
 }
 
-function sha256(str) {
-    const hasher = createHash('sha256');
-    hasher.update(str);
-    return hasher.digest('hex');
-}
+

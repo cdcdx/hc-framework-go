@@ -76,6 +76,7 @@ type App struct {
 	shopSvc       *shop.ShopService
 	logSvc        *common.LogService
 	pointsApplier pointsRelayer
+	wsHub         *handler.WebSocketHub
 
 	// 以下工厂字段为可测试性引入的最小接缝：单测可注入桩，覆盖 initCache / initScheduler 异常路径。
 	cacheFactory func(cm *config.Manager, log *zap.Logger) (*cache.Manager, error)

@@ -5,6 +5,7 @@ import (
 	"github.com/cdcdx/hc-framework-go/internal/service/common"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,6 +23,8 @@ import (
 	"github.com/cdcdx/hc-framework-go/internal/repository"
 	"github.com/cdcdx/hc-framework-go/pkg/bcrypt"
 	"github.com/cdcdx/hc-framework-go/pkg/mail"
+	"golang.org/x/sync/semaphore"
+	"runtime"
 )
 
 // Google OAuth 端点（授权码换 token、获取用户信息）
@@ -54,6 +57,15 @@ type AuthService struct {
 	producer  mq.Producer      // 可选：事件生产者（nil 时不发布事件）
 	lockStore cache.AccountLockStore // 账号锁定存储（Redis 跨 Pod 共享 / 进程内回退）
 	mailer    mail.Sender      // 可选：邮件发送器（nil 时跳过注册确认邮件）
+
+	// bcryptSem 是 bcrypt 哈希/校验的准入信号量。
+	// bcrypt 是纯 CPU 计算且【不响应 context 取消】，一旦放行就会占满核心直到算完；
+	// 这导致即便 request_timeout / write_timeout 触发，运算也无法中断，CPU 被几千个并行的
+	// bcrypt 吃光 → 请求排队数十秒 → 撞穿 write_timeout(30s) → 服务端直接关连接 → 客户端 EOF
+	// （见 ws.js 压测日志：http_req_duration p95=51s、login 大量 EOF）。
+	// 因此必须在进入 bcrypt 之前用信号量做准入控制：容量 = 核心数，每核同时只跑 1 个 bcrypt，
+	// 超限立即返回 ErrServerBusy（→ handler 返回 503 快速失败），让负载卸载而非无限排队拖垮整机。
+	bcryptSem *semaphore.Weighted
 }
 
 // NewAuthService 创建认证服务
@@ -66,6 +78,31 @@ func NewAuthService(cfg *config.Manager, userRepo repository.UserRepository, log
 		producer:  producer,
 		lockStore: lockStore,
 		mailer:    mailer,
+		bcryptSem: semaphore.NewWeighted(int64(runtime.NumCPU())),
+	}
+}
+
+// ErrServerBusy 表示 bcrypt 计算资源（CPU 核心）已耗尽，新请求拒绝准入。
+// 由 handler 映射为 HTTP 503 + CodeServiceUnavailable（应用层负载卸载，区别于超时/崩溃）。
+var ErrServerBusy = errors.New("bcrypt compute slots exhausted")
+
+// acquireBcrypt 非阻塞获取一个 bcrypt 计算槽位（容量=核心数）。
+// 返回 ErrServerBusy 表示当前 CPU 已被 bcrypt 占满，调用方应立即失败（503）而不是排队等待——
+// bcrypt 不响应 ctx 取消，排队只会把尾延迟拉爆并最终撞穿 write_timeout 表现为 EOF。
+func (s *AuthService) acquireBcrypt(ctx context.Context) error {
+	if s.bcryptSem == nil {
+		return nil
+	}
+	if s.bcryptSem.TryAcquire(1) {
+		return nil
+	}
+	return ErrServerBusy
+}
+
+// releaseBcrypt 释放 bcrypt 计算槽位（配合 acquireBcrypt 使用）。
+func (s *AuthService) releaseBcrypt() {
+	if s.bcryptSem != nil {
+		s.bcryptSem.Release(1)
 	}
 }
 
@@ -539,7 +576,12 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, n
 		return ErrInvalidCredentials
 	}
 
-	// 校验旧密码
+	// 校验旧密码（bcrypt 准入）
+	if err := s.acquireBcrypt(ctx); err != nil {
+		return err
+	}
+	defer s.releaseBcrypt()
+
 	if bcrypt.Compare(user.PasswordHash, oldPassword) != nil {
 		return ErrInvalidCredentials
 	}

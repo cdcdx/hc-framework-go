@@ -159,8 +159,6 @@ generate:
 ## 因包含 idle_settle 结算洪峰，自动先执行 mysql-stress-tune 抬高 MySQL 服务端上限。
 k6-test: mysql-stress-tune
 	@set -e; \
-	echo "⚠️  请确认服务端正在运行 make run-stress（config/config.stress.yaml，连接池 300）"; \
-	sleep 2; \
 	echo "========================================"; \
 	echo "=== k6 压力测试：场景 1 — 注册/登录 ==="; \
 	echo "========================================"; \
@@ -203,7 +201,6 @@ k6-test-idle: mysql-stress-tune
 	@k6 run scripts/k6/idle.js
 
 ## k6-test-idle-settle: 仅运行挂机结算洪峰压测（idle.settled）
-## 注意：500 VU 下必须先用 make run-stress 启动服务（config/config.stress.yaml，连接池 300），
 ## 并在本机 MySQL 服务端容量不足时运行 mysql-stress-tune（max_connections=500）。
 ## 本目标已自动依赖 mysql-stress-tune，防止遗漏服务端调优。
 k6-test-idle-settle: mysql-stress-tune
@@ -253,7 +250,6 @@ k6-test-mixed:
 
 ## k6-test-ws: 仅运行 WebSocket 长连接压测
 k6-test-ws:
-	@echo "⚠️  需先启动服务端（make run-stress）并确保 JWT 可用"
 	@sleep 1
 	k6 run scripts/k6/ws.js
 
@@ -279,7 +275,6 @@ TRUNCATE TABLE idle_records;" 2>/dev/null \
 		|| echo "[warn] docker 'mysql' 容器不可达；请手动清空 hc_business.idle_records / idle_daily_points（TRUNCATE 或 DELETE）。"
 
 ## stress-idle-settle: 一键压测 idle_settle 结算洪峰（自动先抬高 MySQL 上限）
-##   前置：在另一终端用 make run-stress 启动压测档服务（config/config.stress.yaml，mq.type=kafka）。
 stress-idle-settle: mysql-stress-tune
 	@echo "========================================"
 	@echo "=== k6 压力测试：场景 3 — 挂机结算洪峰（500 VU）==="

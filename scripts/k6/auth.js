@@ -1,7 +1,7 @@
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 import { Trend, Rate } from 'k6/metrics';
-import { createHash } from 'k6/crypto';
+import { makeEmail, passwordHash } from './accounts.js';
 
 // ============================================
 // 认证模块压测：注册 + 登录
@@ -46,22 +46,21 @@ const loginDuration = new Trend('auth_login_duration');
 const registerSuccess = new Rate('auth_register_ok');
 const loginSuccess = new Rate('auth_login_ok');
 
-// 生成随机邮箱（加 VU+iter 防止极端并发下碰撞）
+// 生成统一格式邮箱（含 VU+iter 防止极端并发下碰撞，详见 accounts.js）
 function randomEmail(vuId, iterId) {
-    const id = Math.random().toString(36).substring(2, 10);
-    return `test_${vuId}_${iterId}_${id}@example.com`;
+    return makeEmail('auth', `${vuId}_${iterId}`);
 }
 
 export default function () {
     const email = randomEmail(__VU, __ITER);
     const rawPassword = 'TestPass123!';
-    const passwordHash = sha256(rawPassword);
+    const passwordHashVal = passwordHash(rawPassword);
 
     // 注册
     group('Register', () => {
         const payload = JSON.stringify({
             email: email,
-            password: passwordHash,
+            password: passwordHashVal,
         });
 
         const res = http.post(`${BASE_URL}/api/v1/auth/register`, payload, {
@@ -84,7 +83,7 @@ export default function () {
     group('Login', () => {
         const payload = JSON.stringify({
             email: email,
-            password: passwordHash,
+            password: passwordHashVal,
         });
 
         const res = http.post(`${BASE_URL}/api/v1/auth/login`, payload, {
@@ -112,9 +111,4 @@ export default function () {
     sleep(0.5);
 }
 
-// sha256 对字符串做 SHA256 哈希，返回小写十六进制
-function sha256(str) {
-    const hasher = createHash('sha256');
-    hasher.update(str);
-    return hasher.digest('hex');
-}
+
