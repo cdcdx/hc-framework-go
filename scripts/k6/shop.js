@@ -1,6 +1,7 @@
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 import { Trend, Rate, Counter, Gauge } from 'k6/metrics';
+import { makeEmail, passwordHash } from './accounts.js';
 
 // ============================================
 // 积分商城压测：商品兑换（抢购场景）

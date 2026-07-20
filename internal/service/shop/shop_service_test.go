@@ -3,18 +3,23 @@ package shop
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"os"
 	"regexp"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cdcdx/hc-framework-go/internal/cache"
 	"github.com/cdcdx/hc-framework-go/internal/config"
 	"github.com/cdcdx/hc-framework-go/internal/db"
 	"github.com/cdcdx/hc-framework-go/internal/model"
 	"github.com/cdcdx/hc-framework-go/internal/repository"
 	"github.com/cdcdx/hc-framework-go/internal/service/common"
 
+	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -589,5 +594,161 @@ func TestFlashActivity_CreateValidation(t *testing.T) {
 	}
 	if _, err := svc.CreateFlashActivity(ctx, &FlashActivityInput{ItemID: 0, LimitQty: 5}); err == nil {
 		t.Fatalf("item_id<=0 should fail")
+	}
+}
+
+// ============================================================
+// 普通兑换削峰层对齐抢购（P1-4 修复验证）
+// ============================================================
+//
+// 背景：普通兑换原本在 FindItemByID（含分桶库存 DB 读取）之后才做 Redis 预扣，
+// 与抢购(FlashSale)「Redis 削峰层在 DB 之前拦截」相反，导致售罄后海量「库存不足」
+// 空刀仍穿透到 DeductStock 行锁（shop k6 压测中 33 万次）。修复：
+//   1) Redeem 入口在 FindItemByID/DB 之前先只读判断 Redis 是否已售罄（IsRedeemSoldOut），
+//      命中即返回 10311（ErrRedeemSoldOutPeak），不触达 DB；
+//   2) DB 权威判定真售罄时，Redis 预扣不回滚（INCR 回填），而是 ReconcileRedeem 硬置 0，
+//      使削峰层持续拦截。
+// 以下集成测试需可达的 Redis（默认 127.0.0.1:6379，可用 HC_TEST_REDIS 覆盖地址、
+// HC_TEST_REDIS_DB 覆盖库号），L2 不可用时自动跳过。
+
+// newTestRedisCacheMgr 构建指向测试 Redis 的缓存管理器；L2 不可用时跳过测试。
+func newTestRedisCacheMgr(t *testing.T) *cache.Manager {
+	t.Helper()
+	addr := os.Getenv("HC_TEST_REDIS")
+	if addr == "" {
+		addr = "127.0.0.1:6379"
+	}
+	dbNum := 15
+	if v := os.Getenv("HC_TEST_REDIS_DB"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			dbNum = n
+		}
+	}
+	cm := config.NewManager(&config.Config{
+		Cache: config.CacheConfig{
+			L2: config.L2CacheConfig{
+				Enabled:   true,
+				Type:      "redis",
+				Addresses: []string{addr},
+				DB:        dbNum,
+				PoolSize:  10,
+			},
+		},
+	})
+	m, _ := cache.NewManager(cm, zap.NewNop())
+	if m == nil || !m.L2Enabled() {
+		t.Skipf("Redis L2 不可用 (%s db=%d)，跳过削峰对齐集成测试", addr, dbNum)
+	}
+	return m
+}
+
+// TestRedeem_PeakLayerInterceptsBeforeDB 验证普通兑换削峰层对齐抢购：
+// 商品真售罄（Redis redeem:stock 硬置 0）时，Redeem 应在 FindItemByID/DB 行锁之前
+// 被削峰层(10311)拦截，且不触发任何库存扣减；在售时（计数器=剩余库存）仍正常兑换扣减。
+func TestRedeem_PeakLayerInterceptsBeforeDB(t *testing.T) {
+	cacheMgr := newTestRedisCacheMgr(t)
+	_, gdb := newTestShop(t)
+	ctx := context.Background()
+
+	// 用唯一商品 ID，避免跨测试复用同一 Redis L2/削峰 Key 造成污染。
+	itemID := time.Now().UnixNano()
+	item := &model.ShopItem{
+		ID: itemID, Name: "peak", PricePoints: 100, Stock: 10,
+		Version: 0, Category: "c", IsActive: true,
+	}
+	if err := gdb.Create(item).Error; err != nil {
+		t.Fatal(err)
+	}
+	uid := fmt.Sprintf("peak_u_%d", itemID)
+	if err := gdb.Create(&model.User{
+		UserID: uid, Username: uid, Email: uid + "@x.com",
+		PointsBalance: 100000, Status: "active",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	userRepo := repository.NewUserRepository(gdb)
+	logSvc := common.NewLogService(&fakeLogRepo{}, &fakeMonitorRepo{})
+	t.Cleanup(func() { logSvc.Close() })
+	svc := NewShopService(&config.Config{}, userRepo, db.CreateSingleRWDB(gdb), logSvc, cacheMgr, nil, nil)
+
+	// 1) 模拟商品已真售罄：将 Redis 削峰计数器硬置 0（等价于 DB 售罄后 Reconcile/不回滚状态）。
+	if err := cacheMgr.ReconcileRedeem(ctx, itemID, 0, 5*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+
+	// 削峰层应在触达 DB 之前拦截，返回 10311（ErrRedeemSoldOutPeak）。
+	_, err := svc.Redeem(ctx, uid, &RedeemRequest{ItemID: itemID, Quantity: 1})
+	if err == nil {
+		t.Fatalf("expected sold-out peak intercept, got nil")
+	}
+	if !errors.Is(err, ErrRedeemSoldOutPeak) {
+		t.Fatalf("err = %v, want ErrRedeemSoldOutPeak (10311)", err)
+	}
+
+	// 关键断言：DB 库存未被扣减（证明请求未穿透到 DeductStock 行锁）。
+	var after model.ShopItem
+	if err := gdb.First(&after, itemID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.Stock != 10 {
+		t.Fatalf("peak-layer intercept must not deduct DB stock: got %d, want 10", after.Stock)
+	}
+
+	// 2) 反向验证：计数器=剩余库存(10) 时，在售请求仍能正常兑换并扣减 1。
+	if err := cacheMgr.ReconcileRedeem(ctx, itemID, 10, 5*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	order, err := svc.Redeem(ctx, uid, &RedeemRequest{ItemID: itemID, Quantity: 1})
+	if err != nil {
+		t.Fatalf("in-stock redeem should succeed, got %v", err)
+	}
+	if order == nil || order.ID == 0 {
+		t.Fatalf("in-stock redeem should produce an order")
+	}
+	var after2 model.ShopItem
+	if err := gdb.First(&after2, itemID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after2.Stock != 9 {
+		t.Fatalf("in-stock redeem should deduct 1: got %d, want 9", after2.Stock)
+	}
+}
+
+// TestRedeem_PeakLayerNoRollbackOnSoldOut 验证修复依赖的缓存原语不变式：
+// 「真售罄」时 Redis 计数器应被硬置 0（ReconcileRedeem），而非像旧逻辑那样
+// ReleaseRedeem(INCR) 回填成 1。计数器保持 0 时 IsRedeemSoldOut=true，削峰层持续拦截；
+// 一旦被 INCR 回填成 1，下一请求又会穿过削峰层打到 DB 行锁（空刀振荡的根因）。
+// 说明：服务层 defer 的「真售罄不回滚」仅在 FindItemByID 读到库存>0 但 DeductStock
+// 行锁判售罄的竞态窗口触发，无法在单测中确定性复现，故此处直接校验其依赖的缓存语义。
+func TestRedeem_PeakLayerNoRollbackOnSoldOut(t *testing.T) {
+	cacheMgr := newTestRedisCacheMgr(t)
+	ctx := context.Background()
+	itemID := time.Now().UnixNano() + 1
+
+	// 模拟「Redis 预扣成功（计数器 1→0）但 DB 实际已售罄」的竞态窗口。
+	if err := cacheMgr.ReconcileRedeem(ctx, itemID, 1, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	result, _, _ := cacheMgr.TryAcquireRedeem(ctx, itemID, 1, time.Minute) // 预扣成功，计数器 →0
+	if result != cache.RedeemOK {
+		t.Fatalf("TryAcquireRedeem should succeed, got %v", result)
+	}
+	// 新逻辑（修复后 defer）：DB 权威售罄 → ReconcileRedeem 硬置 0。
+	if err := cacheMgr.ReconcileRedeem(ctx, itemID, 0, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if !cacheMgr.IsRedeemSoldOut(ctx, itemID) {
+		t.Fatalf("修复后：真售罄必须保持计数器为 0（IsRedeemSoldOut=true），但为 false")
+	}
+
+	// 对照：旧逻辑 ReleaseRedeem(INCR) 会把计数器从 0 重新抬回 1 → 削峰层失效。
+	if err := cacheMgr.ReconcileRedeem(ctx, itemID, 0, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	cacheMgr.TryAcquireRedeem(ctx, itemID, 0, time.Minute) // 售罄路径，不计扣，仍为 0
+	_ = cacheMgr.ReleaseRedeem(ctx, itemID)                       // 旧逻辑回滚
+	if cacheMgr.IsRedeemSoldOut(ctx, itemID) {
+		t.Fatalf("旧逻辑：ReleaseRedeem 会把计数器回填为 1（IsRedeemSoldOut=false 才符合旧行为），但得到 true")
 	}
 }

@@ -111,6 +111,15 @@ func (s *ShopService) Redeem(ctx context.Context, userID string, req *RedeemRequ
 	}
 	defer s.releaseLock(ctx, lockKey)
 
+	// 对齐抢购(FlashSale)：Redis 削峰层在 FindItemByID/DB 行锁之前拦截「已售罄」。
+	// 商品真售罄后 redeem:stock 计数器被硬置 0（见下方 defer：DB 权威售罄不回滚，
+	// 而是 ReconcileRedeem 置 0），此处一次只读 GET 即可在 DB 之前拦截海量空刀，
+	// 避免 33 万次库存不足请求穿透到 DeductStock 行锁（shop k6 压测根因）。
+	// 键不存在（未预扣/仍在售）则放行后续链路，由 FindItemByID + 行锁权威兜底。
+	if s.cacheMgr != nil && s.cacheMgr.L2Enabled() && s.cacheMgr.IsRedeemSoldOut(ctx, req.ItemID) {
+		return nil, ErrRedeemSoldOutPeak
+	}
+
 	// 校验商品。DeductStock 已改为原子条件扣减（WHERE stock>=quantity），不依赖 version
 	// 乐观锁，因此此处走默认读路径（从库 + 三级缓存）即可，无需强读主库。真正的库存扣减
 	// 与防超卖由 DB 行锁兜底，缓存中 stock/version 略滞后无害。
@@ -148,7 +157,18 @@ func (s *ShopService) Redeem(ctx context.Context, userID string, req *RedeemRequ
 	}
 	defer func() {
 		if acquiredRedis && !committed {
-			_ = s.cacheMgr.ReleaseRedeem(ctx, item.ID)
+			// 对齐抢购(FlashSale)的削峰语义：Redis 预扣是前置削峰层，DB 行锁才是权威防超卖。
+			// 当 DB 权威判定「真售罄」(ErrStockInsufficient) 时，不得回滚(INCR) Redis 预扣——
+			// 否则计数器被从 0 重新抬回 1，下一个请求又穿过削峰层打到 DB 行锁，形成
+			// 「预扣成功→DB售罄→回滚→再预扣…」的空刀风暴（shop k6 压测中 333830/334629
+			// 次无效请求穿透到 DB，仅 799 次被削峰层 10311 拦截）。改为将 Redis 计数器硬置 0，
+			// 此后 TryAcquireRedeem 持续返回 SoldOut，由削峰层(10311)拦截，不再触达 DB。
+			// 非库存类失败（积分不足/订单写失败等）库存仍可用，照旧回滚释放名额。
+			if errors.Is(err, ErrStockInsufficient) {
+				_ = s.cacheMgr.ReconcileRedeem(ctx, item.ID, 0, redeemStockTTL)
+			} else {
+				_ = s.cacheMgr.ReleaseRedeem(ctx, item.ID)
+			}
 		}
 	}()
 

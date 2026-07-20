@@ -620,6 +620,24 @@ func (m *Manager) ReconcileRedeem(ctx context.Context, itemID int64, remaining i
 	return m.l2Client.Set(ctx, m.l2Key(RedeemStockKey(itemID)), remaining, ttl).Err()
 }
 
+// IsRedeemSoldOut 判断普通商品兑换是否已在 Redis 削峰层被置为售罄：redeem:stock 键存在且值<=0。
+// 仅当键已存在时返回 true；键不存在表示该商品尚未预扣/仍在售，交由后续链路（FindItemByID + 行锁）判定。
+// 用途：对齐抢购(FlashSale)，在 FindItemByID/DB 行锁之前以一次只读 GET 拦截「已售罄」空刀，
+// 避免海量无效请求打到 DB（shop k6 压测中 33 万次库存不足请求穿透到 DeductStock 行锁的根因）。
+// 计数器为 0 仅出现在商品真售罄时（成功兑换递减至 0 / ReconcileRedeem 置 0 / DB 权威售罄不回滚硬置 0），
+// 不会误拦在售商品。L2 不可用时返回 false（降级为纯 DB 兜底）。
+func (m *Manager) IsRedeemSoldOut(ctx context.Context, itemID int64) bool {
+	if m.L2 == nil || m.l2Client == nil {
+		return false
+	}
+	key := m.l2Key(RedeemStockKey(itemID))
+	n, err := m.l2Client.Get(ctx, key).Int()
+	if err != nil {
+		return false
+	}
+	return n <= 0
+}
+
 // Lock 获取分布式锁（委托 L2 Redis）。
 // 缓存未启用（L2 为 nil）时直接返回成功，由业务层乐观锁兜底，避免阻断兑换流程。
 func (m *Manager) Lock(ctx context.Context, key string, ttl time.Duration) (bool, error) {
