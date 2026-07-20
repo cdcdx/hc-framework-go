@@ -5,5 +5,4 @@ make k6-test-idle-settle && sleep 300
 make k6-test-shop && sleep 300
 make k6-test-shop-flash && sleep 300
 make k6-test-mixed
-
-
+make k6-test-ws

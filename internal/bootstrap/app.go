@@ -179,6 +179,10 @@ func (a *App) run() error {
 		return err
 	}
 
+	// 6.7 初始化 WebSocket Hub（用于实时推送：挂机心跳替代、积分/任务通知）
+	a.wsHub = handler.NewWebSocketHub(a.zlog)
+	go a.wsHub.Run(bgCtx) // bgCtx 取消时 Hub 自动关闭所有连接
+
 	// 7. 构建依赖注入容器
 	deps := &handler.Dependencies{
 		Cfg:         cfg,
@@ -193,6 +197,7 @@ func (a *App) run() error {
 		ShopSvc:     a.shopSvc,
 		LogSvc:      a.logSvc,
 		CacheMgr:    a.cacheMgr,
+		WSHub:       a.wsHub,
 	}
 
 	// 8. 初始化路由

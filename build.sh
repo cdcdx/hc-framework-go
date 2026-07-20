@@ -348,6 +348,7 @@ declare -A K6_SCENARIOS=(
     [shop]="shop.js"
     [shop-flash]="shop_flash.js"
     [mixed]="mixed.js"
+    [ws]="ws.js"
 )
 cmd_k6() {
     require_cmd k6
@@ -355,7 +356,7 @@ cmd_k6() {
 
     if [[ "$scenario" == "all" ]]; then
         local failed=0
-        for s in auth idle idle-settle shop shop-flash mixed; do
+        for s in auth idle idle-settle shop shop-flash mixed ws; do
             log_info "===== k6 场景: ${s} (${K6_SCENARIOS[$s]}) ====="
             k6 run "${K6_DIR}/${K6_SCENARIOS[$s]}" || failed=1
         done

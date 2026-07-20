@@ -1,4 +1,4 @@
-.PHONY: all build run run-stress test test-idle lint clean docker-build docker-run migrate help k6-test k6-test-auth k6-test-idle k6-test-idle-settle k6-test-shop k6-test-shop-flash k6-test-mixed mysql-stress-tune stress-idle-settle
+.PHONY: all build run run-stress test test-idle lint clean docker-build docker-run migrate help k6-test k6-test-auth k6-test-idle k6-test-idle-settle k6-test-shop k6-test-shop-flash k6-test-mixed k6-test-ws mysql-stress-tune stress-idle-settle
 
 # 项目变量
 APP_NAME := hcf-server
@@ -186,6 +186,11 @@ k6-test: mysql-stress-tune
 	echo "========================================"; \
 	k6 run scripts/k6/mixed.js; \
 	echo ""; \
+	echo "========================================"; \
+	echo "=== k6 压力测试：场景 6 — WebSocket 长连接 ==="; \
+	echo "========================================"; \
+	k6 run scripts/k6/ws.js; \
+	echo ""; \
 	echo "✅ All k6 stress tests passed!"
 
 ## k6-test-auth: 仅运行认证压测
@@ -245,6 +250,12 @@ k6-test-mixed:
 	  echo "[warn] ADMIN_TOKEN 未设置，跳过 Redis 库存对账（L2 启用时 item1 可能假售罄；建议 export ADMIN_TOKEN 后重跑）"; \
 	fi
 	k6 run scripts/k6/mixed.js
+
+## k6-test-ws: 仅运行 WebSocket 长连接压测
+k6-test-ws:
+	@echo "⚠️  需先启动服务端（make run-stress）并确保 JWT 可用"
+	@sleep 1
+	k6 run scripts/k6/ws.js
 
 ## mysql-stress-tune: 运行时抬高 MySQL 服务端上限（idle_settle 500 VU 必备；详见 deployments/mysql-stress.cnf）
 ##   不重启、即时生效；未起 docker 'mysql' 容器时打印提示，请按 cnf 手动 SET GLOBAL 或挂载后重启。

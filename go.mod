@@ -33,6 +33,7 @@ require (
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
+	github.com/gorilla/websocket v1.5.3
 )
 
 require (
@@ -133,4 +134,5 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	stathat.com/c/consistent v1.0.0 // indirect
+	github.com/gorilla/websocket v1.5.3
 )

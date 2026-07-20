@@ -99,6 +99,12 @@ func Setup(deps *handler.Dependencies) *gin.Engine {
 	// 修改密码（需鉴权）：旧密码校验通过后失效所有已签发 Token
 	authorized.PUT("/user/password", authHandler.ChangePassword)
 
+	// WebSocket 实时推送（需 JWT 鉴权，用于挂机心跳替代、积分/任务实时通知）
+	if deps.WSHub != nil {
+		wsHandler := handler.NewWSHandler(deps.WSHub)
+		authorized.GET("/ws", wsHandler.Upgrade)
+	}
+
 	// 用户模块
 	userHandler := handler.NewUserHandler(deps.UserRepo)
 	user := authorized.Group("/user")

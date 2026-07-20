@@ -26,4 +26,5 @@ type Dependencies struct {
 	ShopSvc     *shop.ShopService
 	LogSvc      *common.LogService
 	CacheMgr    *cache.Manager
+	WSHub       *WebSocketHub             // WebSocket 连接管理器（实时推送）
 }
