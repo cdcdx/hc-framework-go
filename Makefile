@@ -47,11 +47,11 @@ build:
 		go build $(BUILD_FLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(APP_NAME) $(MAIN_FILE)
 	@echo "Build complete: $(BUILD_DIR)/$(APP_NAME)"
 
-## build-local: 本地编译（当前系统架构）
+## build-local: 本地编译（当前系统架构，启用 CGO 以支持 SQLite）
 build-local:
 	@echo "Building $(APP_NAME) for local platform..."
 	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 go build $(BUILD_FLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(APP_NAME) $(MAIN_FILE)
+	CGO_ENABLED=1 go build $(BUILD_FLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(APP_NAME) $(MAIN_FILE)
 	@echo "Build complete: $(BUILD_DIR)/$(APP_NAME)"
 
 ## run: 运行（开发模式）
