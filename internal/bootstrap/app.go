@@ -138,8 +138,14 @@ func (a *App) run() error {
 	// 1.5 初始化链路追踪 Provider（OTel 兼容，W3C traceparent）
 	a.initTracing()
 
+	// 1.6 初始化缓存管理器（L1 + L2 + Bloom + HotKey），并注入为 Token 黑名单检查器。
+	// 必须在 InitDatabases 之前，以便 user 仓库接入三级缓存。L2 不可用时自动降级，不影响启动。
+	if err := a.initCache(); err != nil {
+		return err
+	}
+
 	// 2. 初始化四个数据库（逻辑见 InitDatabases）
-	dbs, err := InitDatabases(cfg)
+	dbs, err := InitDatabases(cfg, a.cacheMgr)
 	if err != nil {
 		zlog.Error("Failed to init databases", zap.Error(err))
 		return err
@@ -153,11 +159,6 @@ func (a *App) run() error {
 
 	// 3. 初始化 JWT 管理器
 	if err := a.initJWT(); err != nil {
-		return err
-	}
-
-	// 3.5 初始化缓存管理器（L1 + L2 + Bloom + HotKey），并注入为 Token 黑名单检查器
-	if err := a.initCache(); err != nil {
 		return err
 	}
 
@@ -662,7 +663,7 @@ func (a *App) initScheduler() error {
 	})
 	// 启动即做一次 best-effort 回填（覆盖「服务中途部署、当日尚未回填」的窗口），不阻塞启动；
 	// idleSvc 未初始化（如单测桩）时跳过，避免空指针。
-		if a.idleSvc != nil {
+	if a.idleSvc != nil {
 		go func() {
 			if _, err := a.idleSvc.BackfillDailyPoints(context.Background()); err != nil {
 				zlog.Warn("Idle daily points startup backfill failed", zap.Error(err))

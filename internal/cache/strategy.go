@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"math/rand"
 	"time"
@@ -116,6 +117,20 @@ type LoadFn func(ctx context.Context) (interface{}, error)
 func (s *CacheStrategy) Get(ctx context.Context, key string, ttl time.Duration, loader LoadFn) (interface{}, error) {
 	// 1. L1 本地缓存（进程内，无外部依赖，降级时仍可用）
 	if s.L1 != nil {
+		// 优先取原始 JSON 字节：供调用方（DecodeCached）单次 Unmarshal 还原，
+		// 省去 L1.Get 内部「字节→泛型 map」+ DecodeCached「map→Marshal→T」的多余序列化往返。
+		if rc, ok := s.L1.(*RistrettoCache); ok {
+			if data, ok := rc.GetBytes(key); ok {
+				if s.HotKey != nil {
+					s.HotKey.Record(key)
+				}
+				// 空值标记（L1 存 "null" 字节）按原语义返回 nil
+				if bytes.Equal(data, []byte("null")) {
+					return nil, nil
+				}
+				return data, nil
+			}
+		}
 		val, ok, err := s.L1.Get(ctx, key)
 		if err == nil && ok {
 			// 热点检测记录
@@ -513,13 +528,13 @@ func (s *CacheStrategy) safeSetNull(ctx context.Context, key string, writeL2 boo
 	}
 	if writeL2 && s.L2 != nil {
 		if rc, ok := s.L2.(*RedisCache); ok {
-		go func() {
-			ctx, cancel := s.bgAsyncCtx()
-			defer cancel()
-			if err := rc.SetNull(ctx, key, nullTTL); err != nil {
-				s.log.Warn("Null cache L2 failed", zap.String("key", key), zap.Error(err))
-			}
-		}()
+			go func() {
+				ctx, cancel := s.bgAsyncCtx()
+				defer cancel()
+				if err := rc.SetNull(ctx, key, nullTTL); err != nil {
+					s.log.Warn("Null cache L2 failed", zap.String("key", key), zap.Error(err))
+				}
+			}()
 		}
 	}
 }

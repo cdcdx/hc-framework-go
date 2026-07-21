@@ -666,6 +666,16 @@ func DecodeCached[T any](val interface{}) (T, error) {
 	if v, ok := val.(T); ok {
 		return v, nil
 	}
+	// 命中 L1/L2 时缓存层可能直接返回原始 JSON 字节（见 CacheStrategy.get）：
+	// 单次 Unmarshal 即可还原，省去「泛型 map → 重新 Marshal」的多余序列化往返。
+	switch raw := val.(type) {
+	case []byte:
+		var out T
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return zero, fmt.Errorf("cache: unmarshal cached value to %T: %w", zero, err)
+		}
+		return out, nil
+	}
 	// 命中缓存时为 JSON 反序列化的中间类型（map[string]interface{} / []interface{} 等），
 	// 经 JSON 中转还原为具体类型 T。
 	b, err := json.Marshal(val)

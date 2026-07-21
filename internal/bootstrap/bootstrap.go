@@ -257,7 +257,7 @@ func checkBusinessTables(conn *gorm.DB, models []interface{}) {
 
 // InitDatabases 按配置初始化四个数据库（business / user / monitor / log）以及
 // 结构化登录记录库，各库在主驱动不可用时回退 SQLite。
-func InitDatabases(cfg *config.Config) (*Databases, error) {
+func InitDatabases(cfg *config.Config, cacheMgr *cache.Manager) (*Databases, error) {
 	zlog := logger.L()
 
 	// Business DB: 业务数据（支持 mysql / postgres / sqlite，主驱动不可用时回退 sqlite）
@@ -442,7 +442,7 @@ func InitDatabases(cfg *config.Config) (*Databases, error) {
 		if err != nil {
 			return nil, err
 		}
-		userRepo = repository.NewUserRepository(userDB)
+		userRepo = repository.NewUserRepositoryWithCache(userDB, cacheMgr)
 	}
 
 	// 注册 user 库连接池指标（MongoDB 驱动无 *sql.DB，SQLDB() 返回 error 自动跳过）。
