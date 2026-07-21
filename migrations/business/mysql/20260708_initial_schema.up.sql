@@ -19,6 +19,11 @@ CREATE TABLE IF NOT EXISTS idle_records (
     status ENUM('active', 'completed', 'timeout') NOT NULL DEFAULT 'active',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    -- 防并发重复：status='active' 时生成 "user_id:device_id" 唯一键；非 active 时为 NULL
+    -- （MySQL 的 UNIQUE 索引允许多个 NULL，故不影响多条 completed/timeout 历史）。
+    -- 与 internal/repository/idle_repo.go EnsureUniqueIndex() 的 MySQL 分支保持一致。
+    active_device_key VARCHAR(191)
+        GENERATED ALWAYS AS (IF(status = 'active', CONCAT(user_id, ':', device_id), NULL)) STORED,
     INDEX idx_user_id (user_id),
     INDEX idx_user_start (user_id, start_time),
     INDEX idx_status (status),
@@ -222,6 +227,8 @@ CREATE TABLE IF NOT EXISTS shop_flash_activities (
 -- --------------------------------------------------
 CREATE INDEX idx_user_device_status ON idle_records (user_id, device_id, status);
 CREATE INDEX idx_user_status ON idle_records (user_id, status);
+-- 防并发重复：同用户同设备同时仅一个 active 挂机会话（幂等）。基于生成列 active_device_key 的唯一索引。
+CREATE UNIQUE INDEX idx_unique_active_device ON idle_records (active_device_key);
 -- 覆盖索引：加速「当日已得挂机积分」范围聚合（user_id + created_at 过滤 + points_earned 覆盖），走索引-only 扫描避免回表随机 IO。
 CREATE INDEX idx_idle_user_created_pts ON idle_records (user_id, created_at, points_earned);
 CREATE INDEX idx_pts_user_created ON points_transactions (user_id, created_at);

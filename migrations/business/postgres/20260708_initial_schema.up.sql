@@ -28,6 +28,11 @@ CREATE INDEX IF NOT EXISTS idx_idle_status_hb ON idle_records(status, last_heart
 CREATE INDEX IF NOT EXISTS idx_idle_user_created ON idle_records(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_idle_user_device_status ON idle_records(user_id, device_id, status);
 CREATE INDEX IF NOT EXISTS idx_idle_user_status ON idle_records(user_id, status);
+-- 防并发重复：同用户同设备同时仅一个 active 挂机会话（幂等）。
+-- 与 internal/repository/idle_repo.go Create() 的 ON CONFLICT (user_id, device_id, status)
+-- WHERE status='active' 配套；ON CONFLICT 必须匹配唯一约束，否则报 42P10。
+-- 部分唯一索引：仅对 status='active' 强制唯一，不影响多条 completed/timeout 历史记录。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_active_device ON idle_records(user_id, device_id, status) WHERE status = 'active';
 -- 覆盖索引：加速「当日已得挂机积分」范围聚合（user_id + created_at 过滤 + points_earned 覆盖），走索引-only 扫描避免回表随机 IO。
 CREATE INDEX IF NOT EXISTS idx_idle_user_created_pts ON idle_records(user_id, created_at, points_earned);
 

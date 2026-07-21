@@ -538,7 +538,7 @@ func (s *IdleService) settleSession(ctx context.Context, record *model.IdleRecor
 	points := int64(durationMinutes) * s.cfg.Idle.PointsPerMinute
 
 	// 每日积分上限（修复 TOCTOU）：改用「预占-确认/回退」原子封顶。
-	// 原实现先事务外读 GetDailyPoints 计算剩余额度，事务提交后才 IncrDailyPoints，两个并发结算会读到
+	// 原实现先事务外读 GetDailyPoints 计算剩余额度，事务提交后才累加 Redis 计数，两个并发结算会读到
 	// 相同的 alreadyEarned，各自认为有剩余额度并分别写 points，导致 Redis 计数与 DB 聚合双双超限。
 	// 现由 Redis Lua 脚本在单线程内原子计算「本次可授予积分」（封顶到 DailyPointsLimit），授予即累加
 	// 计数；事务提交成功则保留（确认），事务失败或被乐观锁跳过则 DECRBY 回退（释放额度）。
@@ -637,7 +637,7 @@ func (s *IdleService) settleSession(ctx context.Context, record *model.IdleRecor
 	if applied {
 		// 增量维护每日积分汇总：best-effort，移出关键结算事务（见 13 §3.48「非关键路径移出
 		// 请求关键路径」思路）。该汇总有 BackfillDailyPoints 兜底（启动回填 + 定时 idle-daily-points-backfill），
-		// 读路径优先 Redis 计数器（IncrDailyPoints），偶发失败不影响积分余额（users 表经 outbox 已保证），
+		// 读路径优先 Redis 计数器（由 AcquireDailyPoints 的 Lua 累加），偶发失败不影响积分余额（users 表经 outbox 已保证），
 		// 故不纳入事务，避免其 DB 抖动/行锁竞争拖垮核心结算（积分流水 + Outbox）引发 ctx deadline 超时回滚。
 		if points > 0 {
 			bctx, bcancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -673,8 +673,8 @@ func (s *IdleService) finalizeSettlement(ctx context.Context, record *model.Idle
 	if s.points != nil {
 		s.points.ApplyAsync(ctx, outboxRec)
 	}
-	// 注：每日积分额度已由 settleSession 通过 AcquireDailyPoints 预占并计入 Redis 计数，
-	// 事务提交成功即「确认」，此处不再 IncrDailyPoints（避免重复累加）。
+	// 每日积分额度由 settleSession 经 AcquireDailyPoints 预占时通过 Lua 累加进 Redis 计数；
+	// 事务提交成功即「确认」，此处无需重复累加。
 	s.idleRepo.InvalidateActiveByUser(ctx, record.UserID, record.DeviceID)
 	s.idleRepo.DeleteHeartbeat(ctx, record.UserID, record.DeviceID)
 	s.idleRepo.RemoveActiveSession(ctx, record.UserID, record.DeviceID)

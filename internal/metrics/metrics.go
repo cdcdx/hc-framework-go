@@ -112,9 +112,9 @@ var (
 	IdleRepoErrorsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "idle_repo_errors_total",
-			Help: "Total idle repository best-effort operation failures (DB fallback / Redis counter incr), partitioned by operation. Failures are non-fatal (logged, not propagated) but indicate L2/DB instability.",
+			Help: "Total idle repository best-effort operation failures (DB fallback / Redis counter prewarm), partitioned by operation. Failures are non-fatal (logged, not propagated) but indicate L2/DB instability.",
 		},
-		[]string{"operation"}, // incr_daily_points | get_daily_points_db
+		[]string{"operation"}, // get_daily_points_db | read_daily_points_summary | acquire_prewarm
 	)
 
 	// MQ 生产者发送计数（统一各适配器口径），用于发送失败率告警与容量观测。

@@ -390,9 +390,11 @@ func (c *KafkaConsumer) Subscribe(ctx context.Context, topics []string, handler 
 					if err := store.Flush(); err != nil {
 						c.log.Warnf("kafka consumer offset flush failed: %v", err)
 					}
-				case <-flushStop:
-					_ = store.Flush()
-					return
+			case <-flushStop:
+				if err := store.Flush(); err != nil {
+					c.log.Warnf("kafka consumer offset flush on shutdown failed: %v", err)
+				}
+				return
 				}
 			}
 		}()

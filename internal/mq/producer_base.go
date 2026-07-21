@@ -2,8 +2,10 @@ package mq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sony/gobreaker/v2"
@@ -35,6 +37,11 @@ type producerBase struct {
 	log          Logger
 	typeName     string // 指标标签：kafka|rabbitmq|rocketmq
 	maxCloseWait time.Duration
+
+	// lastBreakerWarn 记录上一次「熔断打开→落 DLQ」WARN 的 unix 纳秒时间戳，用于在该路径被
+	// 高频触发时（broker 长期不可达）限流，避免持续故障刷屏。其余 DLQ 落盘（真实发送失败 /
+	// 队列溢出）不受此限。
+	lastBreakerWarn atomic.Int64
 
 	// 由具体生产者注入的协议相关钩子：
 	publish func(ctx context.Context, msg *event.Message) error // = 协议 sendOne（熔断保护已在其中）
@@ -150,11 +157,39 @@ func (b *producerBase) requeue(msg *event.Message) {
 	}
 }
 
+// dlqBreakerWarnInterval 是「熔断打开→落 DLQ」WARN 的限流窗口：broker 长期不可达时该路径会被
+// 高频触发，若不节流会在日志里刷出海量相同告警。同一生产者在一个窗口内最多打一条，既保留可观测性
+// （运维能第一时间发现 broker 不可达）又不淹没有效日志；指标与落盘不受影响，每条消息照常进 DLQ。
+const dlqBreakerWarnInterval = 10 * time.Second
+
 // fallbackToDLQ 把消息降级到本地 DLQ（统一出口：记录日志、指标与落盘）。
+// 指标与落盘对每条消息都执行（不丢消息）；仅 WARN 日志按要求节流/区分措辞：
+//   - 熔断打开（errBreakerOpen）：消息并未真正发送，而是降级等待 broker 恢复后 replay，
+//     用专门措辞避免与「真实发送失败」混淆，并按熔断打开区间限流（见 logBreakerOpenDLQ）。
+//   - 其余（真实发送失败 / 队列溢出）：保留原 WARN，语义明确且无持续刷屏风险。
 func (b *producerBase) fallbackToDLQ(msg *event.Message, sendErr error) {
-	b.log.Warnf("%s send failed (event=%s): %v", b.typeName, msg.EventType, sendErr)
 	recordDLQ(b.typeName, b.topicFor(msg))
 	b.dlq.append(b.topicFor(msg), msg, sendErr)
+
+	if errors.Is(sendErr, errBreakerOpen) {
+		b.logBreakerOpenDLQ(msg.EventType)
+		return
+	}
+	b.log.Warnf("%s send failed (event=%s): %v", b.typeName, msg.EventType, sendErr)
+}
+
+// logBreakerOpenDLQ 在熔断打开、消息降级到 DLQ 时打 WARN，但按 dlqBreakerWarnInterval 限流：
+// 同一生产者在一个窗口内最多一条，避免 broker 长期不可达时每条消息刷一条相同告警。
+// 用 CAS 抢占打日志资格，保证并发下窗口内至多一条；指标与落盘不受限流影响。
+func (b *producerBase) logBreakerOpenDLQ(eventType string) {
+	now := time.Now().UnixNano()
+	last := b.lastBreakerWarn.Load()
+	if now-last < dlqBreakerWarnInterval.Nanoseconds() {
+		return
+	}
+	if b.lastBreakerWarn.CompareAndSwap(last, now) {
+		b.log.Warnf("%s circuit breaker open, routing to DLQ (event=%s) — broker unreachable? will replay on recovery", b.typeName, eventType)
+	}
 }
 
 // topicFor 事件类型 -> 主题。未知类型回落到 "events"。

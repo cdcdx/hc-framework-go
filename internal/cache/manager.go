@@ -100,7 +100,7 @@ func NewManager(cm *config.Manager, log *zap.Logger) (*Manager, error) {
 func (m *Manager) Close() {
 	m.log.Info("Shutting down cache manager...")
 
-	// 1. 取消广播失效监听协程（否则 Subscribe 会随 context.Background 永久泄漏）
+	// 1. 取消广播失效监听协程（invalCancel 由 context.WithCancel 派生，l2.Subscribe 已 select ctx.Done() 响应取消，无泄漏）
 	if m.invalCancel != nil {
 		m.invalCancel()
 	}
@@ -317,7 +317,7 @@ func (m *Manager) Delete(ctx context.Context, keys ...string) error {
 
 // ────────── 每日挂机积分：原子封顶预占（修复结算 TOCTOU） ──────────
 //
-// 原实现先在事务外读 GetDailyPoints 计算剩余额度（封顶），事务提交后才 IncrDailyPoints 累加 Redis 计数。
+// 原实现先在事务外读 GetDailyPoints 计算剩余额度（封顶），事务提交后才累加 Redis 计数。
 // 两个并发结算会读到相同的 alreadyEarned，各自认为有剩余额度并分别写 points，导致 Redis 计数与 DB
 // 聚合双双超过 DailyPointsLimit。改为「预占-确认/回退」：用 Redis Lua 脚本在单线程内原子地计算
 // 本次可授予积分（封顶到 limit），授予即累加计数；事务提交成功则保留（确认），事务失败或被乐观锁

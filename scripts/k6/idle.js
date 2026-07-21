@@ -144,18 +144,25 @@ export function setup() {
     }
     const startResponses = http.batch(startRequests);
     let started = 0;
-    const startFail = {};          // status -> count
-    let startSampleBody = '';      // 一条失败样本 body（含业务 code：10101 过期/10102 无效/10104 失效）
+    const startFail = {};          // HTTP 状态或业务 code -> count
+    let startSampleBody = '';      // 一条失败样本 body（含业务 code：10101 过期/10102 无效/10104 失效 / 或 DB 错误）
     for (let i = 0; i < startResponses.length; i++) {
-        if (startResponses[i].status !== 200) {
-            startFail[startResponses[i].status] = (startFail[startResponses[i].status] || 0) + 1;
-            if (!startSampleBody) startSampleBody = String(startResponses[i].body).slice(0, 200);
+        const r = startResponses[i];
+        let body = null;
+        try { body = JSON.parse(r.body); } catch (e) { body = null; }
+        // 关键：idle/start 失败仍可能返回 HTTP 200（handler 用 response.Error，业务 code 非 0）。
+        // 只校验 status === 200 会把这些失败误判为成功，导致后续心跳 100% not_idle（即本次 idle_heartbeat_ok=0%）。
+        // 必须同时校验业务 code === 0，否则失败被静默吞掉、难以定位根因。
+        if (r.status !== 200 || (body && body.code !== 0)) {
+            const key = r.status !== 200 ? 'HTTP' + r.status : 'code' + (body ? body.code : '?');
+            startFail[key] = (startFail[key] || 0) + 1;
+            if (!startSampleBody) startSampleBody = String(r.body).slice(0, 300);
             continue;
         }
         users.push({ email: authed[i].email, token: authed[i].token, deviceId: `k6_idle_${i}` });
         started++;
     }
-    console.log(`[Setup] idle/start: ok=${started} httpFail=${JSON.stringify(startFail)} sample=${startSampleBody}`);
+    console.log(`[Setup] idle/start: ok=${started} fail=${JSON.stringify(startFail)} sample=${startSampleBody}`);
 
     console.log(`[Setup] Created ${users.length} test users, started ${started} idle sessions`);
 

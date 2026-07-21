@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -48,10 +47,14 @@ func (r *IdleRepository) Create(ctx context.Context, record *model.IdleRecord) e
 	if r.rw == nil {
 		return fmt.Errorf("idle repo: rw not initialized")
 	}
+	// 注意：冲突过滤必须用 TargetWhere（生成在 DO NOTHING 之前的
+	// `ON CONFLICT (...) WHERE status='active' DO NOTHING`），不能用 Where——GORM 会把 OnConflict.Where
+	// 渲染到 DO NOTHING 之后（见 gorm v1.31.2 clause/on_conflict.go:49-53），PostgreSQL 不允许，会报
+	// `syntax error at or near "WHERE"`，导致 Create 直接失败、所有 idle/start 返回 code 10003。
 	err := r.rw.Write(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "user_id"}, {Name: "device_id"}, {Name: "status"}},
-		Where:     clause.Where{Exprs: []clause.Expression{clause.Eq{Column: "status", Value: "active"}}},
-		DoNothing: true,
+		Columns:     []clause.Column{{Name: "user_id"}, {Name: "device_id"}, {Name: "status"}},
+		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Eq{Column: "status", Value: "active"}}},
+		DoNothing:   true,
 	}).Create(record).Error
 	if err == nil {
 		// Start 幂等预检（FindActiveByDevice）会把「设备级」键（idle:active:{userID}:{deviceID}）
@@ -647,9 +650,23 @@ func (r *IdleRepository) UpsertDailyPoints(ctx context.Context, userID, day stri
 		return nil
 	}
 	row := &model.IdleDailyPoints{UserID: userID, Day: day, Total: delta}
+	// 跨库增量幂等：total = 已有行 total + delta。
+	// - PostgreSQL：ON CONFLICT DO UPDATE 右侧裸列名会与 EXCLUDED 伪表同名列歧义
+	//   （SQLSTATE 42702），必须用目标表名限定（idle_daily_points.total）。
+	// - SQLite：官方明确「表名限定与裸列名等效」，两种都接受（与 Postgres 同款写法即可）。
+	// - MySQL：ON DUPLICATE KEY UPDATE 中裸列名无歧义、指向已有行，且官方仅示范裸列名；
+	//   为规避「限定名在个别 MySQL 版本/场景下报错」的不确定性，单独用裸列名。
+	// 故按方言分支构造表达式（与 BackfillDailyPoints 的方言分支风格一致）。
+	var totalExpr clause.Expr
+	switch r.rw.Master().Dialector.Name() {
+	case "mysql":
+		totalExpr = gorm.Expr("total + ?", delta)
+	default: // postgres / sqlite
+		totalExpr = gorm.Expr("idle_daily_points.total + ?", delta)
+	}
 	return r.rw.Write(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "user_id"}, {Name: "day"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{"total": gorm.Expr("total + ?", delta)}),
+		DoUpdates: clause.Assignments(map[string]interface{}{"total": totalExpr}),
 	}).Create(row).Error
 }
 
@@ -717,19 +734,6 @@ func (r *IdleRepository) BackfillDailyPoints(ctx context.Context, day string) (i
 		return 0, res.Error
 	}
 	return res.RowsAffected, nil
-}
-
-// IncrDailyPoints 结算生效后累加当日积分计数器（best-effort；key 已由 GetDailyPoints 预热并带 TTL）。
-// 失败仅记日志忽略，不影响结算结果（积分余额以 users 表为准）。
-func (r *IdleRepository) IncrDailyPoints(ctx context.Context, userID string, pts int64) {
-	if r.cacheMgr == nil || r.cacheMgr.L2 == nil || pts <= 0 {
-		return
-	}
-	if _, err := r.cacheMgr.L2.IncrBy(ctx, r.dailyPointsKey(userID), pts); err != nil {
-		zap.L().Warn("incr daily points counter failed", zap.String("user_id", userID), zap.Error(err))
-		// Redis 计数累加失败不影响结算（积分余额以 users 表为准），但持续失败说明 L2 抖动，需可观测。
-		metrics.IdleRepoErrorsTotal.WithLabelValues("incr_daily_points").Inc()
-	}
 }
 
 // AcquireDailyPoints 原子预占当日挂机积分额度（封顶到 limit），修复结算 TOCTOU。
@@ -817,7 +821,13 @@ func (r *IdleRepository) AutoMigrate() error {
 	if r.rw == nil {
 		return fmt.Errorf("idle repo: rw not initialized")
 	}
-	return r.rw.Master().AutoMigrate(&model.IdleRecord{})
+	if err := r.rw.Master().AutoMigrate(&model.IdleRecord{}); err != nil {
+		return err
+	}
+	// 部分唯一索引（同用户同设备同时仅一个 active 挂机会话）无法用 GORM tag 表达，
+	// 故在 AutoMigrate 建表后追加，使「程序自动建表」路径也带上该约束。
+	// 与 raw SQL 迁移 (20260708_initial_schema) 及启动期 EnsureIndexes() 保持一致。
+	return r.EnsureUniqueIndex()
 }
 
 // EnsureUniqueIndex 确保同用户同设备只能有一个 active 会话（DDL 操作主库）

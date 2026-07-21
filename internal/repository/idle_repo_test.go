@@ -314,7 +314,7 @@ func (f *storeFakeL2) IncrBy(ctx context.Context, key string, value int64) (int6
 }
 
 // TestDailyPointsCounter 验证 GetDailyPoints 命中 Redis 缓存即返回（不再回源 DB），
-// 且 IncrDailyPoints 累加正确。
+// 且 Redis 计数器累加后读取能反映最新值。
 func TestDailyPointsCounter(t *testing.T) {
 	sf := &storeFakeL2{fakeL2: &fakeL2{}}
 	r := &IdleRepository{activeSetShards: 1, cacheMgr: &cache.Manager{L2: sf}}
@@ -332,8 +332,10 @@ func TestDailyPointsCounter(t *testing.T) {
 		t.Fatalf("GetDailyPoints got %d want 100 (should read from Redis, no DB)", got)
 	}
 
-	// 累加后读取应反映最新值
-	r.IncrDailyPoints(context.Background(), "u1", 50)
+	// 累加后读取应反映最新值（生产路径由 TryAcquireDailyPoints(Lua) 累加，单测用底层 IncrBy 等价模拟）
+	if _, err := sf.IncrBy(context.Background(), key, 50); err != nil {
+		t.Fatalf("incr daily counter: %v", err)
+	}
 	got, err = r.GetDailyPoints(context.Background(), "u1")
 	if err != nil {
 		t.Fatalf("GetDailyPoints after incr err: %v", err)
