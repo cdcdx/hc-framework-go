@@ -1,4 +1,4 @@
-.PHONY: all build run run-stress test test-idle lint clean docker-build docker-run migrate help k6-test k6-test-auth k6-test-idle k6-test-idle-settle k6-test-shop k6-test-shop-flash k6-test-mixed k6-test-ws mysql-stress-tune stress-idle-settle
+.PHONY: all build run run-stress test test-idle lint clean docker-build docker-run migrate help k6-test k6-test-auth k6-test-idle k6-test-idle-settle k6-test-shop k6-test-shop-flash k6-test-mixed k6-test-ws mysql-stress-tune pg-stress-tune stress-tune stress-idle-settle
 
 # 项目变量
 APP_NAME := hcf-server
@@ -12,6 +12,31 @@ MAIN_FILE := $(CMD_DIR)/main.go
 # （余数前置到前若干桶，与 Go 侧 makeBuckets 语义一致）。需 MySQL 8+（递归 CTE）；
 # 若切换 SQLite/Postgres，请相应调整取模/整除语法（MOD/DIV -> % // FLOOR）。
 RESET_SHOP_BUCKETS_SQL = DELETE FROM shop_item_stock_buckets WHERE item_id=1; INSERT INTO shop_item_stock_buckets (item_id, bucket, stock) WITH RECURSIVE seq(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM seq WHERE n < 15) SELECT 1, seq.n, CASE WHEN seq.n < (SELECT MOD(stock,16) FROM shop_items WHERE id=1) THEN (SELECT stock DIV 16 FROM shop_items WHERE id=1) + 1 ELSE (SELECT stock DIV 16 FROM shop_items WHERE id=1) END FROM seq;
+
+# PostgreSQL 版库存分桶重置（与 RESET_SHOP_BUCKETS_SQL 语义一致，改用 PG 语法：MOD() 函数 + 整数除法 /）。
+# 仅当业务库切到 postgres 时由下方 RESET_STOCK_CMD 选用。
+RESET_SHOP_BUCKETS_SQL_PG = DELETE FROM shop_item_stock_buckets WHERE item_id=1; INSERT INTO shop_item_stock_buckets (item_id, bucket, stock) WITH RECURSIVE seq(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM seq WHERE n < 15) SELECT 1, seq.n, CASE WHEN seq.n < (SELECT MOD(stock,16) FROM shop_items WHERE id=1) THEN (SELECT stock/16 FROM shop_items WHERE id=1) + 1 ELSE (SELECT stock/16 FROM shop_items WHERE id=1) END FROM seq;
+
+# 业务库类型：读取 config/config.yaml 的 database.business.driver；可被 make ... DB_DRIVER=postgres 覆盖。
+# 用于压测目标自动选择 mysql / postgres 的服务端调优与库存重置命令。
+DB_DRIVER ?= $(shell awk '/^[[:space:]]*business:/{f=1} f && /^[[:space:]]*driver:[[:space:]]*/{val=$$2; gsub(/"/,"",val); print val; exit}' config/config.yaml)
+
+# PostgreSQL 连接串（与 config.yaml database.business.postgres.master 对应）
+PG_DSN = postgres://demo:123456@127.0.0.1:5432/hc_business?sslmode=disable
+
+# PostgreSQL 容器名：默认按 :5432 端口自动发现；可用 make ... PG_CONTAINER=xxx 强制指定（本地安装 PG 时留空则走 sudo 本地路径）。
+PG_CONTAINER ?= $(shell docker ps --filter "publish=5432" --format "{{.Names}}" 2>/dev/null | head -1)
+
+# 按业务库驱动分派：库存重置命令、max_connections 校验、以及压测前依赖的调优目标。
+ifeq ($(DB_DRIVER),postgres)
+RESET_STOCK_CMD = if [ -n "$(PG_CONTAINER)" ]; then docker exec -i "$(PG_CONTAINER)" psql -U demo -d hc_business -c "UPDATE shop_items SET stock=500, price_points=0, version=0, is_active=1 WHERE id=1; $(RESET_SHOP_BUCKETS_SQL_PG)" 2>/dev/null || PGPASSWORD=123456 psql "$(PG_DSN)" -c "UPDATE shop_items SET stock=500, price_points=0, version=0, is_active=1 WHERE id=1; $(RESET_SHOP_BUCKETS_SQL_PG)" 2>/dev/null || echo "[warn] failed to reset stress item 1 stock/buckets via PG"; else PGPASSWORD=123456 psql "$(PG_DSN)" -c "UPDATE shop_items SET stock=500, price_points=0, version=0, is_active=1 WHERE id=1; $(RESET_SHOP_BUCKETS_SQL_PG)" 2>/dev/null || echo "[warn] failed to reset stress item 1 stock/buckets via PG"; fi
+CHECK_MAXCONN_CMD = if [ -n "$(PG_CONTAINER)" ]; then docker exec -i "$(PG_CONTAINER)" psql -U demo -d hc_business -c "SHOW max_connections;" 2>/dev/null | grep -q "800" || PGPASSWORD=123456 psql "$(PG_DSN)" -c "SHOW max_connections;" 2>/dev/null | grep -q "800" || echo "[warn] PostgreSQL max_connections 未检测到 800；说明 pg-stress-tune 未生效，请重新执行 make pg-stress-tune（需超级用户 ALTER SYSTEM + 重启）。"; else PGPASSWORD=123456 psql "$(PG_DSN)" -c "SHOW max_connections;" 2>/dev/null | grep -q "800" || echo "[warn] PostgreSQL max_connections 未检测到 800；说明 pg-stress-tune 未生效，请重新执行 make pg-stress-tune（需超级用户 ALTER SYSTEM + 重启）。"; fi
+TUNE_DEP = pg-stress-tune
+else
+RESET_STOCK_CMD = docker exec -i mysql mysql -uroot -p123456 hc_business -e "UPDATE shop_items SET stock=500, price_points=0, version=0, is_active=1 WHERE id=1; $(RESET_SHOP_BUCKETS_SQL)" 2>/dev/null || echo "[warn] failed to reset stock via docker mysql"
+CHECK_MAXCONN_CMD = docker exec -i mysql mysql -uroot -p123456 -e "SHOW VARIABLES LIKE 'max_connections';" 2>/dev/null | grep -q "max_connections[[:space:]]*800" || echo "[warn] MySQL max_connections 未检测到 800；如服务端仍报 Too many connections，请重新执行 make mysql-stress-tune。"
+TUNE_DEP = mysql-stress-tune
+endif
 
 # 版本信息：构建时通过 -ldflags -X main.version / -X main.commit 注入 hc_build_info。
 # 可用 `make build VERSION=v1.2.3 COMMIT=abc1234` 覆盖版本/commit（覆盖时不带 -dirty）。
@@ -162,7 +187,7 @@ generate:
 	swag init -g $(MAIN_FILE) -o ./swagger
 
 ## k6-test: 运行 k6 压力测试（全部 4 个场景，任一失败则整体失败）因包含 idle_settle 结算洪峰，自动先执行 mysql-stress-tune 抬高 MySQL 服务端上限。
-k6-test: mysql-stress-tune
+k6-test: $(TUNE_DEP)
 	@set -e; \
 	echo "========================================"; \
 	echo "=== k6 压力测试：场景 1 — 注册/登录 ==="; \
@@ -201,14 +226,14 @@ k6-test-auth:
 	k6 run scripts/k6/auth.js
 
 ## k6-test-idle: 运行挂机压测（心跳 + 结算洪峰）同 k6-test-idle-settle，本目标已自动依赖 mysql-stress-tune 以适配结算洪峰。
-k6-test-idle: mysql-stress-tune
+k6-test-idle: $(TUNE_DEP)
 	@k6 run scripts/k6/idle.js
 
-## k6-test-idle-settle: 仅运行挂机结算洪峰压测（idle.settled）并在本机 MySQL 服务端容量不足时运行 mysql-stress-tune（max_connections=500）。
-k6-test-idle-settle: mysql-stress-tune
-	@echo "Resetting stress item 1 stock=500 in MySQL(hc_business)..."
-	@docker exec -i mysql mysql -uroot -p123456 hc_business -e "UPDATE shop_items SET stock=500, price_points=0, version=0, is_active=1 WHERE id=1; $(RESET_SHOP_BUCKETS_SQL)" 2>/dev/null || echo "[warn] failed to reset stress item 1 stock/buckets via docker mysql"
-	@docker exec -i mysql mysql -uroot -p123456 -e "SHOW VARIABLES LIKE 'max_connections';" 2>/dev/null | grep -q "max_connections[[:space:]]*800" || echo "[warn] MySQL max_connections 未检测到 800；如服务端仍报 Too many connections，请重新执行 make mysql-stress-tune。"
+## k6-test-idle-settle: 仅运行挂机结算洪峰压测（idle.settled），按业务库驱动自动抬升服务端上限（mysql→mysql-stress-tune / postgres→pg-stress-tune）。
+k6-test-idle-settle: $(TUNE_DEP)
+	@echo "Resetting stress item 1 stock=500 in $(DB_DRIVER)(hc_business)..."
+	@$(RESET_STOCK_CMD)
+	@$(CHECK_MAXCONN_CMD)
 	@sleep 2
 	k6 run scripts/k6/idle_settle.js
 
@@ -264,16 +289,53 @@ mysql-stress-tune:
 		SET GLOBAL innodb_buffer_pool_size=1073741824;" 2>/dev/null \
 		|| echo "[warn] docker 'mysql' 容器不可达；请按 deployments/mysql-stress.cnf 手动调优（SET GLOBAL ... 或挂载 cnf 后重启容器）。"
 
+## pg-stress-tune: 运行时抬高 PostgreSQL 服务端上限（idle_settle 500 VU 必备；详见 deployments/postgres-stress.conf）。
+## ⚠️ PG 的 max_connections 是【重启参数】：ALTER SYSTEM SET 写入 postgresql.auto.conf 后必须重启实例才生效，
+##    本目标会自动重启 docker 'postgres' 容器（或本地 PG 服务），无需手动操作；未识别到 PG 时打印手动步骤。
+pg-stress-tune:
+	@echo "Tuning PostgreSQL for stress: max_connections=800, synchronous_commit=off, wal_writer_delay=200ms, checkpoint_timeout=10min ..."
+	@SETTINGS="max_connections=800 synchronous_commit=off wal_writer_delay=200ms checkpoint_timeout=10min"; \
+	if [ -n "$(PG_CONTAINER)" ]; then \
+	  echo "  detected PG docker container: $(PG_CONTAINER)"; \
+	  echo "  -> ALTER SYSTEM (try superuser demo, then postgres)..."; \
+	  for u in demo postgres; do \
+	    for s in $$SETTINGS; do \
+	      K=$${s%%=*}; V=$${s#*=}; docker exec -i "$(PG_CONTAINER)" psql -U $$u -d hc_business -c "ALTER SYSTEM SET $$K='$$V';" 2>&1 | grep -viE "already|does not exist" || true; \
+	    done; \
+	  done; \
+	  echo "  -> restarting $(PG_CONTAINER) (max_connections is a restart parameter)..."; \
+	  docker restart "$(PG_CONTAINER)"; \
+	else \
+	  echo "  no docker container on :5432; trying local PG (sudo -u postgres)..."; \
+	  for s in $$SETTINGS; do \
+	    K=$${s%%=*}; V=$${s#*=}; sudo -u postgres psql -c "ALTER SYSTEM SET $$K='$$V';" 2>&1 | grep -viE "already" || true; \
+	  done; \
+	  PGVER=$$(ls /etc/postgresql 2>/dev/null | head -1); \
+	  if [ -n "$$PGVER" ]; then pg_ctlcluster $$PGVER main restart; elif command -v service >/dev/null 2>&1; then service postgresql restart; else echo "[warn] 无法自动重启本地 PG，请手动重启。"; fi; \
+	fi
+	@sleep 8
+	@echo "Verifying PostgreSQL max_connections..."
+	@OK=0; for i in 1 2 3 4 5 6 7 8; do \
+	  V=$$(if [ -n "$(PG_CONTAINER)" ]; then docker exec -i "$(PG_CONTAINER)" psql -U demo -d hc_business -tAc "SHOW max_connections;" 2>/dev/null; else PGPASSWORD=123456 psql "$(PG_DSN)" -tAc "SHOW max_connections;" 2>/dev/null; fi); \
+	  if echo "$$V" | grep -q 800; then OK=1; echo "  [ok] PostgreSQL max_connections = $$V"; break; fi; \
+	  echo "  ... retry $$i (PG not ready yet)"; sleep 3; \
+	done; \
+	[ $$OK -eq 1 ] || echo "[warn] PostgreSQL max_connections 仍未达到 800 —— 请确认：① ALTER SYSTEM 以超级用户执行；② PG 已重启；③ 容器若用 'postgres -c max_connections=...' 启动，-c 会覆盖 auto.conf，需重建容器（见 deployments/postgres-stress.conf ②）。"
+
 ## db-reset-test: 压测前清空挂机积分相关表，消除历史行累积导致的日初全表 SUM 风暴。清空后 idle_daily_points 由启动/日初回填任务从 idle_records 重建，结算仍可正常累加。
 db-reset-test:
-	@echo "Resetting idle test tables (idle_records, idle_daily_points)..."
+	@echo "Resetting idle test tables (idle_records, idle_daily_points) in $(DB_DRIVER)..."
+ifeq ($(DB_DRIVER),postgres)
+	@if [ -n "$(PG_CONTAINER)" ]; then docker exec -i "$(PG_CONTAINER)" psql -U demo -d hc_business -c "TRUNCATE TABLE idle_daily_points; TRUNCATE TABLE idle_records;" 2>/dev/null || PGPASSWORD=123456 psql "$(PG_DSN)" -c "TRUNCATE TABLE idle_daily_points; TRUNCATE TABLE idle_records;" 2>/dev/null || echo "[warn] 无法清空 PG 的 idle_records / idle_daily_points，请手动 TRUNCATE。"; else PGPASSWORD=123456 psql "$(PG_DSN)" -c "TRUNCATE TABLE idle_daily_points; TRUNCATE TABLE idle_records;" 2>/dev/null || echo "[warn] 无法清空 PG 的 idle_records / idle_daily_points，请手动 TRUNCATE。"; fi
+else
 	@docker exec -i mysql mysql -uroot -p123456 hc_business -e "\
 		TRUNCATE TABLE idle_daily_points; \
 		TRUNCATE TABLE idle_records;" 2>/dev/null \
 		|| echo "[warn] docker 'mysql' 容器不可达；请手动清空 hc_business.idle_records / idle_daily_points（TRUNCATE 或 DELETE）。"
+endif
 
 ## stress-idle-settle: 一键压测 idle_settle 结算洪峰（自动先抬高 MySQL 上限）
-stress-idle-settle: mysql-stress-tune
+stress-idle-settle: $(TUNE_DEP)
 	@echo "========================================"
 	@echo "=== k6 压力测试：场景 3 — 挂机结算洪峰（500 VU）==="
 	@echo "========================================"

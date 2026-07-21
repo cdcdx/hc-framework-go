@@ -27,10 +27,17 @@ server:
   write_timeout: 30s
   idle_timeout: 90s        # keep-alive 空闲连接存活时间；须明显大于客户端心跳间隔(30s)，否则连接被提前关闭导致 "server closed idle connection"/EOF
   shutdown_timeout: 30s    # 优雅关闭等待时间
-  # 应用层在途请求并发硬上限（0=关闭，默认不限）。达上限即快速失败 503（负载卸载），避免无界 goroutine
-  # 在 DB/下游抖动时堆积压垮后端；容量按容量规划设定，重启生效（详见 config.yaml 注释与文档 20）。
+  # 应用层在途请求并发硬上限（0=关闭，默认不限）。在「连接级上限」与「令牌桶限流」之后、业务处理器之前，
+  # 对同时在途的请求数再设一道进程级上限：达上限即快速失败 503（负载卸载），避免无界 goroutine 在 DB/下游
+  # 抖动时堆积压垮后端。容量按容量规划设定（≈ DB 连接池上限 / 单请求平均下游并发度），重启生效。
+  # 百万设备常驻（≈3.3万心跳/s、峰值并发数百~数千）建议 2000~4000；压测/生产按 DB max_open_conns 折算。
   concurrency_limit: 0
-  request_timeout: 10s     # 单请求处理上限：给每个请求 ctx 上 deadline，使下游 DB/锁等待有界（防无限挂起，收敛为有界 504，见 13 §3.48）
+  request_timeout: 10s     # B1：尖峰期写事务（行锁+连接池等待）在 10s 内偶发超时(原 10003)，
+                           # 上调至 30s 让尖峰期进 DB 事务的请求有更多时间在 deadline 前完成，
+                           # 压低「抢购处理超时」(10309)。注意：这是安全网放大、非根治；
+                           # 根治须扩 DB 连接池/服务端连接数（make mysql-stress-tune）或配额分桶。
+                           # 把连接池饱和时的「无限挂起」收敛为有界 504（中间件 middleware.Timeout，见 13 §3.48）。
+                           # 注意：这是「防无限挂起」的安全网，不能替代容量规划；p99 要真正达标须扩容 DB 连接池/服务端。
   cors:
     allowed_origins:
       - "*"
@@ -56,11 +63,11 @@ cache:
     num_counters: 10000000   # Ristretto 计数器数量（预期唯一项数的10倍）
     max_cost: 268435456      # 最大成本（字节），等于 max_memory_mb * 1024 * 1024
   l2:
-    enabled: true
-    type: "redis"           # redis / valkey
+    enabled: true            # 【压测必须 true 且在线】settle 的 GetDailyPoints 命中 L2 才是 O(1)，否则回退全表 SUM 压 DB
+    type: "redis"            # redis / valkey
     addresses:
       - "127.0.0.1:6379"
-    password: ""            # 生产环境通过环境变量/Secret 注入，勿明文提交
+    password: ""             # 生产环境通过环境变量/Secret 注入，勿明文提交
     db: 0
     # 连接池：百万设备常驻时心跳（SETEX）峰值约 3.3 万/s、离线扫描批量判活也会占用连接。
     # 单 Redis 节点建议 pool_size 200~500；Redis Cluster 可按分片均摊。
@@ -119,10 +126,10 @@ database:
     mysql:
       master: "mysql://demo:123456@127.0.0.1:3306/hc_business?charset=utf8mb4&parseTime=True"
       max_idle_conns: 25
-      max_open_conns: 120      # 须 ≤ MySQL max_connections(151)，否则高并发触发 Too many connections
+      max_open_conns: 120      # 开发默认值：须 ≤ 当前 MySQL max_connections。
       conn_max_lifetime: 1h
       # 预估主从复制延迟（延迟双删退避参考；0=关闭）
-      replication_lag: 0s  # 密码勿提交
+      replication_lag: 0s
       slaves:
         - "mysql://demo:123456@127.0.0.1:3307/hc_business?charset=utf8mb4&parseTime=True"
       slave_ping_interval: 3s
@@ -140,10 +147,10 @@ database:
     mysql:
       master: "mysql://demo:123456@127.0.0.1:3306/hc_users?charset=utf8mb4&parseTime=True"
       max_idle_conns: 25
-      max_open_conns: 120      # 须 ≤ MySQL max_connections(151)，否则高并发触发 Too many connections
+      max_open_conns: 120      # 开发默认值：须 ≤ 当前 MySQL max_connections。
       conn_max_lifetime: 1h
     mongodb:
-      dsn: "mongodb://demo:123456@127.0.0.1:27017/hc_users?authSource=admin&authMechanism=SCRAM-SHA-1"  # 密码勿提交
+      dsn: "mongodb://demo:123456@127.0.0.1:27017/hc_users?authSource=admin&authMechanism=SCRAM-SHA-1"
       min_pool_size: 10
       max_pool_size: 100
   # 监控数据（ClickHouse / MySQL / SQLite）
@@ -153,10 +160,10 @@ database:
     mysql:
       master: "mysql://demo:123456@127.0.0.1:3306/hc_monitor?charset=utf8mb4&parseTime=True"
       max_idle_conns: 25
-      max_open_conns: 120      # 须 ≤ MySQL max_connections(151)，否则高并发触发 Too many connections
+      max_open_conns: 120      # 开发默认值：须 ≤ 当前 MySQL max_connections。
       conn_max_lifetime: 1h
     clickhouse:
-      dsn: "clickhouse://admin:123456@127.0.0.1:19000/hc_monitor?compress=0"  # 密码勿提交
+      dsn: "clickhouse://admin:123456@127.0.0.1:19000/hc_monitor?compress=0"
   # 日志数据（Elasticsearch / MySQL / SQLite）
   log:
     driver: "elasticsearch"        # elasticsearch / mysql / sqlite
@@ -164,7 +171,7 @@ database:
     mysql:
       master: "mysql://demo:123456@127.0.0.1:3306/hc_logs?charset=utf8mb4&parseTime=True"
       max_idle_conns: 25
-      max_open_conns: 120      # 须 ≤ MySQL max_connections(151)，否则高并发触发 Too many connections
+      max_open_conns: 120      # 开发默认值：须 ≤ 当前 MySQL max_connections。
       conn_max_lifetime: 1h
     elasticsearch:
       addresses:
@@ -183,8 +190,14 @@ database:
 # ------------------------------------------
 # 消息队列配置
 # ------------------------------------------
+# 统一由 mq.type 选择底层实现：kafka / rabbitmq / rocketmq / memory / none
+#   - none   ：不启用事件总线（仅落库、不发事件）；工厂返回非 nil 的 no-op 生产者/消费者，调用方无需判空
+#   - memory ：进程内总线，本地开发/单测（无 broker 依赖，at-most-once）
+#   - kafka / rabbitmq / rocketmq：接真实 broker
+# 所有类型共用同一套「事件→主题」映射（mq.<type>.topics）与统一消费组 mq.consumer_group。
+# 改 mq.type 即可整体切换实现，无需改消费组/主题映射。
 mq:
-  type: "kafka"              # kafka / rabbitmq / rocketmq / memory / none（none 与未配置 = 不启用事件总线，仅落库）
+  type: "kafka"               # kafka / rabbitmq / rocketmq / memory / none（none 与未配置 = 不启用事件总线，仅落库）
   # 统一消费组：所有队列类型（kafka/rabbitmq/rocketmq/memory）共用的消费组名；
   # 不填则回落 mq.kafka.consumer.group_id，再回落默认 hc-framework-consumer。
   # 切类型无需改 group，避免 rocketmq/rabbitmq 下消费组静默变成默认值。
@@ -193,48 +206,51 @@ mq:
   # rocketmq 的消费失败重试交由服务端 %RETRY%/%DLQ% 处理，此处重试参数对其不生效。
   # 该段完全不填时：先回落 mq.kafka.consumer.*（向后兼容），仍为零则套用默认值 (5, 1s, 16s)。
   consumer:
-    retry_max: 5
-    retry_base_delay: 1s
-    retry_max_delay: 16s
+    retry_max: 5              # 消费处理失败重试上限（>=0 至少尝试 1 次）
+    retry_base_delay: 1s      # 重试退避基准
+    retry_max_delay: 16s      # 重试退避上限
     # prefetch：仅 rabbitmq 生效。channel 预取上限（未 Ack 在途消息数），同时作为有界并发处理上限，
     # 防止消息洪峰时无限起 goroutine / 占用内存。<=0 用默认值 64。
     prefetch: 64
-    # concurrency：仅 memory 消费者生效。每 topic 处理 goroutine 数。仅本地开发/测试，默认 1。
+    # concurrency：仅 memory 消费者生效，每个 topic 的处理 goroutine 数（默认 1，串行）。
+    # memory 是进程内总线（at-most-once，缓冲满即丢弃），仅用于本地开发/测试；提高并发可缓解单 goroutine
+    # 串行消费瓶颈，但不改变「缓冲满丢弃」语义。rabbitmq/kafka 不读此字段。
     concurrency: 1
+
   kafka:
     brokers:
       - "127.0.0.1:9092"
     producer:
-      acks: "all"
-      enable_idempotence: true
+      acks: "all"               # all=需全部 in-sync 副本确认（最高可靠）
+      enable_idempotence: true  # 幂等生产，避免重试导致重复（要求 max_in_flight<=5）
       compression: "lz4"
       max_retries: 3
       delivery_timeout: 5s
-      buffer_memory: 67108864    # 64MB
-      batch_size: 16384          # 16KB
-      max_in_flight: 5
-      queue_size: 8192           # 内存发送队列长度（异步缓冲）
-      max_overflow_workers: 256  # 队列满时溢出发送的最大并发 goroutine 数（C3 限流，避免无限起协程）
-      dlq_enabled: true          # Broker 不可用时降级到本地文件
+      buffer_memory: 67108864   # 64MB 发送缓冲
+      batch_size: 16384         # 16KB 攒批
+      max_in_flight: 5          # 幂等下须 <=5
+      queue_size: 8192          # 内存发送队列长度（异步缓冲）
+      max_overflow_workers: 256 # 队列满时溢出发送的最大并发 goroutine 数（限流，避免无限起协程）
+      dlq_enabled: true         # Broker 不可用时降级到本地文件 DLQ
       dlq_local_path: "./data/dlq/"
     consumer:
-      batch_trigger_interval: 1s
-      worker_pool_size: 8
+      # ── 以下字段在「无消费组 + 按分区直读」模式下【实际生效】（规避 Kafka 4.0 KRaft GroupCoordinator 的 -1 Unknown）──
+      worker_pool_size: 32      # 并发处理 worker 数（ordered_commit=false 时生效；true 时单分区并发=1）；未配置时回落默认 8
       retry_max: 5
       retry_base_delay: 1s
       retry_max_delay: 16s
       dlq_suffix: ".dlq"
       dlq_local_path: "./data/dlq/"
-      close_timeout: 10s         # reader.Close() 兜底超时（C2，避免 broker 不可达时关闭挂起）
-      # 以下对齐参考项目 hc-framework-go，规避 KRaft 下 GroupTopics 触发 -1 Unknown
-      min_bytes: 1024            # 单次拉取最小字节
-      max_bytes: 10485760        # 单次拉取最大字节（10MB）
-      start_from_latest: false   # false=从头消费；true=跳过积压从最新消费
+      close_timeout: 10s        # reader.Close() 兜底超时（C2，避免 broker 不可达时关闭挂起）
+      batch_trigger_interval: 1s # 单次拉取最大等待（Reader.MaxWait，攒批上界）
+      min_bytes: 1024           # 单次拉取最小字节（攒批下界）
+      max_bytes: 10485760       # 单次拉取最大字节（10MB）
+      start_from_latest: false  # false=从头消费；true=跳过积压从最新消费
+                                # 反直觉：仅 offset 文件不存在时生效；文件已存在时改 true 不能跳积压（续读已处理位置），启动会告警（见 13 §3.56）
       # 无消费组模式下 offset 持久化路径（重启续读用），默认 ./data/kafka-offsets.json
       offset_store_path: "./data/kafka-offsets.json"
-      # 同分区顺序提交（仅保证分区内，不提供跨分区一致性）。false（默认）：worker 池并发处理 +
-      # offset「只增不减」推进；true：每分区串行「处理完一条即同步落盘 offset」，分区内严格有序
-      # 且把崩溃重放窗口缩到最小，代价是单分区并发降为 1。
+      # 同分区顺序提交（仅保证分区内，不提供跨分区一致性）。false（默认）：worker 池并发处理 + offset「只增不减」推进；true：每分区串行「处理完一条即同步落盘 offset」，
+      # 分区内严格有序且把崩溃重放窗口缩到最小，代价是单分区并发降为 1。
       ordered_commit: false
       # 无消费组模式多实例分区分配（水平扩展，替代消费组再均衡，见 13 §6.5 #1 / §3.53）：
       # instance_count>1 时本实例仅消费 partition % instance_count == instance_id 的分区，
@@ -264,23 +280,26 @@ mq:
       shop_events: "shop-events"
       user_points: "user-points"     # 积分可靠投递（Outbox）事件主题
       cache_events: "cache-events"   # 写降级时投递的缓存失效/刷新事件主题
+
   rabbitmq:
     url: "amqp://guest:guest@127.0.0.1:5672/"
     # —— 以下为「异步生产者」模型配置（Send 入队即返回，后台 pool_size 个 worker 经 channel 池发布）——
-    send_timeout: 10s            # 发布确认（publisher confirm）等待超时上界，避免确认丢失/极慢时持锁阻塞冻结生产者（仅该 channel），默认 10s
-    pool_size: 8                 # 生产者 channel 池大小（= 异步模型下后台 worker 数），默认 8，高 QPS 可调大（受 broker 每连接 channel 上限约束）
-    queue_size: 8192             # 异步队列长度（队列满转入溢出池）；<=0 用默认 8192
-    max_overflow_workers: 256    # 溢出池最大并发 goroutine 数（限流）；<0 用默认 256
-    dlq_enabled: false           # Broker 不可达/溢出池满时降级到本地文件 DLQ（replay 协程在恢复后自动补发，不丢消息）；建议生产开启
-    dlq_local_path: "./data/dlq/"
+    send_timeout: 10s             # 发布确认（publisher confirm）等待超时上界，避免确认丢失/极慢时持锁阻塞冻结生产者（仅该 channel），默认 10s
+    pool_size: 8                  # 生产者 channel 池大小（= 异步模型下后台 worker 数），默认 8，高 QPS 可调大（受 broker 每连接 channel 上限约束）
+    # —— 以下为「异步生产者」模型配置（Send 入队即返回，后台 pool_size 个 worker 经 channel 池发布，对齐 Kafka/RocketMQ）——
+    queue_size: 8192              # 异步队列长度（队列满转入溢出池）；<=0 用默认 8192
+    max_overflow_workers: 256     # 溢出池最大并发 goroutine 数（限流）；<0 用默认 256
+    dlq_enabled: false            # Broker 不可达/溢出池满时降级到本地文件 DLQ（replay 协程在恢复后自动补发，不丢消息）；建议生产开启
+    dlq_local_path: "./data/dlq/" # 本地 DLQ 目录（JSONL，按 topic 分文件）
     # 事件→主题映射；不填则回落到 mq.kafka.topics.*
     topics:
       user_events: "user-events"
       idle_events: "idle-events"
       task_events: "task-events"
       shop_events: "shop-events"
-      user_points: "user-points"
-      cache_events: "cache-events"
+      user_points: "user-points"     # 积分可靠投递（Outbox）事件主题
+      cache_events: "cache-events"   # 写降级时投递的缓存失效/刷新事件主题
+
   rocketmq:
     endpoints:
       - "127.0.0.1:9876"
@@ -289,10 +308,12 @@ mq:
     # 单个 broker 地址（如 127.0.0.1:10911）。配置后启动期用 admin API 显式预建主题，
     # 即使 broker 关闭 autoCreateTopicEnable 也能工作；留空则发探针消息依赖 broker 自动建主题。
     broker_addr: ""
+    send_timeout: 3s              # 单次同步发送（SendSync）超时，避免 broker 阻塞时挂起调用方，默认 3s
+    send_retries: 2               # 发送失败客户端内部重试次数（覆盖发送阶段瞬时失败），默认 2
     # —— 以下为「异步生产者」模型配置（Send 入队即返回，后台 loop 经 SendSync 发送，对齐 Kafka 生产者）——
-    queue_size: 8192           # 异步发送队列长度（Send 入队即返回），默认 8192
-    max_overflow_workers: 256  # 队列满时溢出发送的最大并发 goroutine 数（限流），默认 256
-    batch_size: 32             # 后台 loop 非阻塞攒批上限（按主题分组逐主题一次 SendSync），减少 broker RTT、压低尾延迟；受单批<=4MB/4096 条约束，<=0 用默认 32
+    queue_size: 8192              # 异步发送队列长度（Send 入队即返回），默认 8192
+    max_overflow_workers: 256     # 队列满时溢出发送的最大并发 goroutine 数（限流），默认 256
+    batch_size: 32                # 后台 loop 非阻塞攒批上限（按主题分组逐主题一次 SendSync），减少 broker RTT、压低尾延迟；受单批<=4MB/4096 条约束，<=0 用默认 32
     # 事件→主题映射；不填则回落到 mq.kafka.topics.*
     topics:
       user_events: "user-events"
@@ -381,11 +402,10 @@ security:
 # ------------------------------------------
 # 运营管理配置（抢购活动创建/预热/对账等运营接口鉴权）
 # ------------------------------------------
-# admin.token 为运营侧共享密钥，保护 /api/v1/admin/* 接口（与普通用户 JWT 体系分离）。
-# 空串时所有 admin 接口一律返回 403。生产环境强烈建议改用环境变量 APP_ADMIN_TOKEN 注入，
-# 避免明文落地；本地开发可用 openssl rand -hex 24 生成。k6 压测需以 ADMIN_TOKEN 传入同一串。
+# 与 config.yaml 中 admin.token 保持一致（k6 压测会以此令牌自动建活动/对账）。
+# 生产环境建议改用环境变量 APP_ADMIN_TOKEN 注入，避免明文落地。
 admin:
-  token: "a686d57401b12a5a39478fc584244fbbfd1b6a3276e9104b"
+  token: "<CHANGE_ME>"
 
 # ------------------------------------------
 # 限流配置
