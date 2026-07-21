@@ -47,15 +47,15 @@ func (r *IdleRepository) Create(ctx context.Context, record *model.IdleRecord) e
 	if r.rw == nil {
 		return fmt.Errorf("idle repo: rw not initialized")
 	}
-	// 注意：冲突过滤必须用 TargetWhere（生成在 DO NOTHING 之前的
-	// `ON CONFLICT (...) WHERE status='active' DO NOTHING`），不能用 Where——GORM 会把 OnConflict.Where
-	// 渲染到 DO NOTHING 之后（见 gorm v1.31.2 clause/on_conflict.go:49-53），PostgreSQL 不允许，会报
-	// `syntax error at or near "WHERE"`，导致 Create 直接失败、所有 idle/start 返回 code 10003。
-	err := r.rw.Write(ctx).Clauses(clause.OnConflict{
-		Columns:     []clause.Column{{Name: "user_id"}, {Name: "device_id"}, {Name: "status"}},
-		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Eq{Column: "status", Value: "active"}}},
-		DoNothing:   true,
-	}).Create(record).Error
+	// 跨数据库幂等插入：仅当已存在「同用户同设备的 active 会话」时跳过（不重复创建），
+	// 冲突由 EnsureUniqueIndex() 在各方言下建立的唯一约束来界定：
+	//   - PostgreSQL / SQLite：部分唯一索引 (user_id, device_id, status) WHERE status='active'
+	//   - MySQL：生成列 active_device_key + 唯一索引（非 active 时为 NULL，UNIQUE 允许多个 NULL）
+	// 采用 clause.OnConflict{DoNothing:true}（不指定 Columns/TargetWhere）：
+	// GORM 对 PostgreSQL/SQLite 生成 `ON CONFLICT DO NOTHING`、对 MySQL 生成 `INSERT IGNORE`，
+	// 三种数据库行为一致（与 event_dedup_repo.go / shop_repo.go 保持一致）。
+	// 冲突时（record.ID 保持 0）调用方会回退 FindActiveByDevice 取回既有会话。
+	err := r.rw.Write(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(record).Error
 	if err == nil {
 		// Start 幂等预检（FindActiveByDevice）会把「设备级」键（idle:active:{userID}:{deviceID}）
 		// 负缓存为空值 30s；此处必须把设备级键一并失效，否则新建的 active 记录在 TTL 内

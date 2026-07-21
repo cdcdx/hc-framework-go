@@ -368,11 +368,14 @@ func (s *IdleService) Start(ctx context.Context, userID, deviceID string) (recor
 		Status:          "active",
 	}
 
-	if err := s.idleRepo.Create(ctx, record); err != nil {
-		// INSERT ON CONFLICT DO NOTHING 可能导致 record.ID=0
-		// 重新查询刚创建的记录
+	if err := s.idleRepo.Create(ctx, record); err != nil || record.ID == 0 {
+		// INSERT ON CONFLICT DO NOTHING / INSERT IGNORE 冲突时不报错但 record.ID 保持 0，
+		// 重新查询已存在的 active 会话，保证幂等 start 返回既有会话而非空记录。
 		created, findErr := s.idleRepo.FindActiveByDevice(ctx, userID, deviceID)
 		if findErr != nil || created == nil {
+			if err == nil {
+				err = fmt.Errorf("idle record id missing after create (concurrent active session?)")
+			}
 			return nil, fmt.Errorf("create idle record: %w", err)
 		}
 		record = created

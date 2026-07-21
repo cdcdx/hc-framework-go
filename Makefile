@@ -82,7 +82,7 @@ run-mysql:
 	APP_DATABASE_LOG_DRIVER=mysql \
 	APP_DATABASE_MONITOR_DRIVER=mysql \
 	APP_MQ_TYPE=none \
-	APP_CACHE_L2_ENABLED=false \
+	APP_CACHE_L2_ENABLED=true \
 	go run -ldflags="$(LDFLAGS)" $(MAIN_FILE)
 
 ## test: 运行测试

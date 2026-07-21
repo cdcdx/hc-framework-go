@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -800,6 +801,11 @@ func loadFromFile(configPath string) (*Config, error) {
 
 	// 环境变量覆盖
 	v.SetEnvPrefix("APP")
+	// 允许 APP_DATABASE_BUSINESS_DRIVER 这类「下划线」环境变量覆盖
+	// database.business.driver 这类「点号」配置键（否则 AutomaticEnv 只会去
+	// 查找带点的 APP_DATABASE.BUSINESS.DRIVER，导致 make run-mysql 等
+	// 通过环境变量切换驱动/DSN 的覆盖被静默忽略）。
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
 	if err := v.ReadInConfig(); err != nil {
