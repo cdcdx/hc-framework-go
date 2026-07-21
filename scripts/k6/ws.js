@@ -18,9 +18,10 @@ import { makeEmail, passwordHash, parseToken } from './accounts.js';
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
 const WS_URL = (BASE_URL.replace(/^http/, 'ws')) + '/api/v1/ws';
 
-// 各场景的最大 VU（与下方 scenarios 的 vusMax 一致），setup 据此预建账号。
-const MAX_HEARTBEAT_VUS = 10000;
-const MAX_RECONNECT_VUS = 200;
+// 各场景的最大 VU（与下方 scenarios 的 vus 一致），setup 据此预建账号。
+// 可用 WS_HEARTBEAT_VUS / WS_RECONNECT_VUS 环境变量覆盖，默认维持原破坏性负载。
+const WS_HEARTBEAT_VUS = parseInt(__ENV.WS_HEARTBEAT_VUS || '10000', 10);
+const WS_RECONNECT_VUS = parseInt(__ENV.WS_RECONNECT_VUS || '200', 10);
 
 // ===================== 自定义指标 =====================
 const wsConnectDuration = new Trend('ws_connect_duration');
@@ -66,9 +67,9 @@ export function setup() {
   }
 
   const t0 = Date.now();
-  batchEnsure('ws_hb', MAX_HEARTBEAT_VUS);
-  batchEnsure('ws_rc', MAX_RECONNECT_VUS);
-  console.log(`[setup] pre-created accounts for ${MAX_HEARTBEAT_VUS} heartbeat + ${MAX_RECONNECT_VUS} reconnect VUs in ${Date.now() - t0}ms`);
+  batchEnsure('ws_hb', WS_HEARTBEAT_VUS);
+  batchEnsure('ws_rc', WS_RECONNECT_VUS);
+  console.log(`[setup] pre-created accounts for ${WS_HEARTBEAT_VUS} heartbeat + ${WS_RECONNECT_VUS} reconnect VUs in ${Date.now() - t0}ms`);
 
   return { tokens };
 }
@@ -185,13 +186,13 @@ export const options = {
   scenarios: {
     ws_heartbeat: {
       executor: 'constant-vus',
-      vus: 10000,
+      vus: WS_HEARTBEAT_VUS,
       duration: '7m',
       exec: 'wsHeartbeat',
     },
     ws_reconnect: {
       executor: 'constant-vus',
-      vus: 200,
+      vus: WS_RECONNECT_VUS,
       duration: '2m',
       exec: 'wsReconnect',
     },

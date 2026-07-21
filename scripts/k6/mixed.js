@@ -8,11 +8,14 @@ import { makeEmail, passwordHash } from './accounts.js';
 // 70% 读 + 30% 写，2000 VU，持续 30 分钟
 // ============================================
 
+// 峰值并发：可用 MIXED_VUS 环境变量覆盖（默认 2000，维持原破坏性负载）；各阶梯按比例缩放。
+const MIXED_VUS = parseInt(__ENV.MIXED_VUS || '2000', 10);
+
 export const options = {
     stages: [
-        { duration: '2m', target: 2000 },   // 缓慢预热
-        { duration: '4m', target: 2000 },   // 稳态满负载
-        { duration: '1m', target: 0 },      // 冷却
+        { duration: '2m', target: MIXED_VUS },   // 缓慢预热
+        { duration: '4m', target: MIXED_VUS },   // 稳态满负载
+        { duration: '1m', target: 0 },           // 冷却
     ],
     // 注册走 bcrypt cost=12，顺序注册 200 个用户极易超过默认 60s 的 setupTimeout。
     // 放大超时上限，并配合 setup 内 http.batch 并发注册，确保 setup 在数秒内完成。

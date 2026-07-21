@@ -25,11 +25,14 @@ const baseTs = Date.now();
 //   3. 建议临时调高 RateLimit 的 burst 或禁用限流，聚焦库存并发扣减逻辑。
 // ============================================
 
+// 峰值并发：可用 FLASH_VUS 环境变量覆盖（默认 1000，维持原破坏性负载）；各阶梯按比例缩放。
+const FLASH_VUS = parseInt(__ENV.FLASH_VUS || '1000', 10);
+
 export const options = {
     stages: [
-        { duration: '10s', target: 1000 },   // 快速拉起（模拟同时抢购）
-        { duration: '50s', target: 1000 },   // 满负载持续
-        { duration: '30s', target: 0 },      // 冷却
+        { duration: '10s', target: FLASH_VUS },   // 快速拉起（模拟同时抢购）
+        { duration: '50s', target: FLASH_VUS },   // 满负载持续
+        { duration: '30s', target: 0 },           // 冷却
     ],
     // 注册走 bcrypt cost=12，放大 setup 超时并分批并发注册（同 shop.js）。
     setupTimeout: '300s',

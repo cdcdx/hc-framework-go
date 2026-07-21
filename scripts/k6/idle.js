@@ -11,6 +11,13 @@ import { makeEmail, passwordHash } from './accounts.js';
 //   idle    —— 心跳上报，走 Redis 续期（不落库、不限流），验证 10k 长连接常驻下的存活语义。
 //   dbstress —— 打 user.driver 对应后端的 profile 读（默认 config.yaml 为 MongoDB，非 MySQL），
 //               用于验证高并发读下的连接池/查询延迟表现。
+// 可调并发档（环境变量覆盖，默认维持原破坏性负载）：
+//   IDLE_VUS      —— 心跳常驻峰值 VU（默认 10000）
+//   DBSTRESS_VUS  —— dbRead 并发峰值 VU（默认 800）
+// 例：IDLE_VUS=1500 DBSTRESS_VUS=200 k6 run scripts/k6/idle.js
+const IDLE_VUS = parseInt(__ENV.IDLE_VUS || '10000', 10);
+const DBSTRESS_VUS = parseInt(__ENV.DBSTRESS_VUS || '800', 10);
+
 export const options = {
     scenarios: {
         idle: {
@@ -18,10 +25,10 @@ export const options = {
             exec: 'idleHeartbeat',
             startVUs: 0,
             stages: [
-                { duration: '1m', target: 2000 },   // 预热
-                { duration: '3m', target: 5000 },   // 加压
-                { duration: '3m', target: 10000 },  // 满负载
-                { duration: '1m', target: 0 },      // 冷却
+                { duration: '1m', target: Math.floor(IDLE_VUS * 0.2) },   // 预热
+                { duration: '3m', target: Math.floor(IDLE_VUS * 0.5) },   // 加压
+                { duration: '3m', target: IDLE_VUS },                      // 满负载
+                { duration: '1m', target: 0 },                             // 冷却
             ],
             gracefulRampDown: '30s',
         },
@@ -33,10 +40,10 @@ export const options = {
             exec: 'dbRead',
             startVUs: 0,
             stages: [
-                { duration: '1m', target: 200 },    // 预热
-                { duration: '4m', target: 800 },    // 满负载（超过连接池 → 等待）
-                { duration: '2m', target: 800 },    // 保持压力
-                { duration: '1m', target: 0 },      // 冷却
+                { duration: '1m', target: Math.floor(DBSTRESS_VUS * 0.25) },  // 预热
+                { duration: '4m', target: DBSTRESS_VUS },                      // 满负载（超过连接池 → 等待）
+                { duration: '2m', target: DBSTRESS_VUS },                      // 保持压力
+                { duration: '1m', target: 0 },                                 // 冷却
             ],
             gracefulRampDown: '30s',
         },

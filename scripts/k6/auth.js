@@ -9,6 +9,9 @@ import { makeEmail, passwordHash } from './accounts.js';
 // 使用 constant-arrival-rate 精确控制 100 req/s
 // ============================================
 
+// 峰值并发：可用 AUTH_VUS 环境变量覆盖（默认 150，维持原破坏性负载）；各阶梯按比例缩放。
+const AUTH_VUS = parseInt(__ENV.AUTH_VUS || '150', 10);
+
 export const options = {
     // 原用 constant-arrival-rate(50/s) + maxVUs:200，但每个迭代耗时 ~19s，
     // 需要 50×19≈950 个 VU 才能维持 → VU 打满、38/s 迭代被丢弃(Insufficient VUs)，
@@ -20,9 +23,9 @@ export const options = {
             executor: 'ramping-vus',
             startVUs: 0,
             stages: [
-                { duration: '1m', target: 50 },    // 预热
-                { duration: '3m', target: 150 },   // 加压
-                { duration: '1m', target: 150 },   // 维持
+                { duration: '1m', target: Math.floor(AUTH_VUS / 3) },   // 预热
+                { duration: '3m', target: AUTH_VUS },                   // 加压
+                { duration: '1m', target: AUTH_VUS },                   // 维持
             ],
             gracefulRampDown: '30s',
         },

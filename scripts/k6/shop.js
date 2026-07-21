@@ -14,11 +14,14 @@ import { makeEmail, passwordHash } from './accounts.js';
 //      以便测试聚焦于库存并发扣减逻辑
 // ============================================
 
+// 峰值并发：可用 SHOP_VUS 环境变量覆盖（默认 1000，维持原破坏性负载）；各阶梯按比例缩放。
+const SHOP_VUS = parseInt(__ENV.SHOP_VUS || '1000', 10);
+
 export const options = {
     stages: [
-        { duration: '10s', target: 1000 },   // 快速拉起（模拟同时抢购）
-        { duration: '50s', target: 1000 },   // 满负载持续
-        { duration: '30s', target: 0 },      // 冷却
+        { duration: '10s', target: SHOP_VUS },   // 快速拉起（模拟同时抢购）
+        { duration: '50s', target: SHOP_VUS },   // 满负载持续
+        { duration: '30s', target: 0 },          // 冷却
     ],
     // 注册走 bcrypt cost=12，200 个用户顺序注册极易超过默认 60s 的 setupTimeout。
     // 放大超时上限，并配合 setup 内 http.batch 分批并发注册，确保 setup 在数秒内完成。
