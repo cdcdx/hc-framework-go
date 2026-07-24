@@ -27,13 +27,16 @@ PG_DSN = postgres://demo:123456@127.0.0.1:5432/hc_business?sslmode=disable
 # PostgreSQL 容器名：默认按 :5432 端口自动发现；可用 make ... PG_CONTAINER=xxx 强制指定（本地安装 PG 时留空则走 sudo 本地路径）。
 PG_CONTAINER ?= $(shell docker ps --filter "publish=5432" --format "{{.Names}}" 2>/dev/null | head -1)
 
+# 压测商品重置库存量：默认 500（shop/mixed/idle-settle）；shop-flash 通过目标级变量覆盖为 1000。
+STRESS_STOCK ?= 500
+
 # 按业务库驱动分派：库存重置命令、max_connections 校验、以及压测前依赖的调优目标。
 ifeq ($(DB_DRIVER),postgres)
-RESET_STOCK_CMD = if [ -n "$(PG_CONTAINER)" ]; then docker exec -i "$(PG_CONTAINER)" psql -U demo -d hc_business -c "UPDATE shop_items SET stock=500, price_points=0, version=0, is_active=1 WHERE id=1; $(RESET_SHOP_BUCKETS_SQL_PG)" 2>/dev/null || PGPASSWORD=123456 psql "$(PG_DSN)" -c "UPDATE shop_items SET stock=500, price_points=0, version=0, is_active=1 WHERE id=1; $(RESET_SHOP_BUCKETS_SQL_PG)" 2>/dev/null || echo "[warn] failed to reset stress item 1 stock/buckets via PG"; else PGPASSWORD=123456 psql "$(PG_DSN)" -c "UPDATE shop_items SET stock=500, price_points=0, version=0, is_active=1 WHERE id=1; $(RESET_SHOP_BUCKETS_SQL_PG)" 2>/dev/null || echo "[warn] failed to reset stress item 1 stock/buckets via PG"; fi
+RESET_STOCK_CMD = if [ -n "$(PG_CONTAINER)" ]; then docker exec -i "$(PG_CONTAINER)" psql -U demo -d hc_business -c "UPDATE shop_items SET stock=$(STRESS_STOCK), price_points=0, version=0, is_active=TRUE WHERE id=1; $(RESET_SHOP_BUCKETS_SQL_PG)" 2>/dev/null || PGPASSWORD=123456 psql "$(PG_DSN)" -c "UPDATE shop_items SET stock=$(STRESS_STOCK), price_points=0, version=0, is_active=TRUE WHERE id=1; $(RESET_SHOP_BUCKETS_SQL_PG)" 2>/dev/null || echo "[warn] failed to reset stress item 1 stock/buckets via PG"; else PGPASSWORD=123456 psql "$(PG_DSN)" -c "UPDATE shop_items SET stock=$(STRESS_STOCK), price_points=0, version=0, is_active=TRUE WHERE id=1; $(RESET_SHOP_BUCKETS_SQL_PG)" 2>/dev/null || echo "[warn] failed to reset stress item 1 stock/buckets via PG"; fi
 CHECK_MAXCONN_CMD = if [ -n "$(PG_CONTAINER)" ]; then docker exec -i "$(PG_CONTAINER)" psql -U demo -d hc_business -c "SHOW max_connections;" 2>/dev/null | grep -q "800" || PGPASSWORD=123456 psql "$(PG_DSN)" -c "SHOW max_connections;" 2>/dev/null | grep -q "800" || echo "[warn] PostgreSQL max_connections 未检测到 800；说明 pg-stress-tune 未生效，请重新执行 make pg-stress-tune（需超级用户 ALTER SYSTEM + 重启）。"; else PGPASSWORD=123456 psql "$(PG_DSN)" -c "SHOW max_connections;" 2>/dev/null | grep -q "800" || echo "[warn] PostgreSQL max_connections 未检测到 800；说明 pg-stress-tune 未生效，请重新执行 make pg-stress-tune（需超级用户 ALTER SYSTEM + 重启）。"; fi
 TUNE_DEP = pg-stress-tune
 else
-RESET_STOCK_CMD = docker exec -i mysql mysql -uroot -p123456 hc_business -e "UPDATE shop_items SET stock=500, price_points=0, version=0, is_active=1 WHERE id=1; $(RESET_SHOP_BUCKETS_SQL)" 2>/dev/null || echo "[warn] failed to reset stock via docker mysql"
+RESET_STOCK_CMD = docker exec -i mysql mysql -uroot -p123456 hc_business -e "UPDATE shop_items SET stock=$(STRESS_STOCK), price_points=0, version=0, is_active=1 WHERE id=1; $(RESET_SHOP_BUCKETS_SQL)" 2>/dev/null || echo "[warn] failed to reset stock via docker mysql"
 CHECK_MAXCONN_CMD = docker exec -i mysql mysql -uroot -p123456 -e "SHOW VARIABLES LIKE 'max_connections';" 2>/dev/null | grep -q "max_connections[[:space:]]*800" || echo "[warn] MySQL max_connections 未检测到 800；如服务端仍报 Too many connections，请重新执行 make mysql-stress-tune。"
 TUNE_DEP = mysql-stress-tune
 endif
@@ -238,11 +241,10 @@ k6-test-idle-settle: $(TUNE_DEP)
 	k6 run scripts/k6/idle_settle.js
 
 ## k6-test-shop: 仅运行商城压测 开跑前重置压测商品（默认 id=1）库存，确保每轮都能验证“零超卖”（库存 500 被并发抢光后成功数不超过 500）。
-## 业务库默认是 Docker 中的 MySQL （hc_business），如切换为 SQLite/Postgres 请相应调整重置命令。
+## 库存重置按 config.yaml 的 database.business.driver 自动选择 MySQL/PostgreSQL（RESET_STOCK_CMD），SQLite 请手动重置。
 k6-test-shop:
-	@echo "Resetting stress item 1 stock=500 in MySQL(hc_business)..."
-	@docker exec -i mysql mysql -udemo -p123456 hc_business -e "UPDATE shop_items SET stock=500, price_points=0, version=0, is_active=1 WHERE id=1;" 2>/dev/null || echo "[warn] failed to reset stock via docker mysql; ensure item 1 exists and is active, or set ITEM_ID to a prepared item"
-	@docker exec -i mysql mysql -udemo -p123456 hc_business -e "$(RESET_SHOP_BUCKETS_SQL)" 2>/dev/null || echo "[warn] failed to reset stock buckets for item 1; ensure shop_item_stock_buckets table exists (P2-5)"
+	@echo "Resetting stress item 1 stock=$(STRESS_STOCK) in $(DB_DRIVER)(hc_business)..."
+	@$(RESET_STOCK_CMD)
 	@if [ -n "$(ADMIN_TOKEN)" ]; then \
 	  curl -s -o /dev/null -w "[ok] reconciled Redis stock for item 1 (HTTP %{http_code})\n" -X POST "http://localhost:8080/api/v1/admin/shop/items/1/reconcile" -H "X-Admin-Token: $(ADMIN_TOKEN)" 2>/dev/null || echo "[warn] reconcile item 1 failed"; \
 	else \
@@ -253,10 +255,11 @@ k6-test-shop:
 ## k6-test-shop-flash: 仅运行定时抢购压测（场景 6）
 ## 验证「零超卖 + 削峰缓存拦截」。setup 自动创建活动（需 ADMIN_TOKEN），或复用 FLASH_ACTIVITY_ID。
 ## 开跑前重置关联商品（默认 id=1）库存，确保每轮都能验证零超卖（限量被并发抢光后成功数不超过限量）。
-## 业务库默认是 Docker 中的 MySQL （hc_business），如切换为 SQLite/Postgres 请相应调整重置命令。
+## 库存重置按 config.yaml 的 database.business.driver 自动选择 MySQL/PostgreSQL（RESET_STOCK_CMD），SQLite 请手动重置。
+k6-test-shop-flash: STRESS_STOCK = 1000
 k6-test-shop-flash:
-	@echo "Resetting stress item 1 stock=1000 in MySQL(hc_business)..."
-	@docker exec -i mysql mysql -udemo -p123456 hc_business -e "UPDATE shop_items SET stock=1000, price_points=0, version=0, is_active=1 WHERE id=1;" 2>/dev/null || echo "[warn] failed to reset stock via docker mysql; ensure item 1 exists and is active, or set FLASH_ITEM_ID to a prepared item"
+	@echo "Resetting stress item 1 stock=$(STRESS_STOCK) in $(DB_DRIVER)(hc_business)..."
+	@$(RESET_STOCK_CMD)
 	@echo "⚠️  需提供 ADMIN_TOKEN（创建活动）或 FLASH_ACTIVITY_ID（复用活动）环境变量"
 	./scripts/k6/shop_flash.sh
 
@@ -264,9 +267,8 @@ k6-test-shop-flash:
 ## 普通兑换走分桶路径（与 shop 一致）；前序 shop 已把分桶扣光、shop-flash 不重建桶，
 ## 故需在开跑前把 item1 列+桶重置回 500，否则混合负载的“写/兑换”部分会因库存为 0 全失败。
 k6-test-mixed:
-	@echo "Resetting stress item 1 stock=500 in MySQL(hc_business)..."
-	@docker exec -i mysql mysql -udemo -p123456 hc_business -e "UPDATE shop_items SET stock=500, price_points=0, version=0, is_active=1 WHERE id=1;" 2>/dev/null || echo "[warn] failed to reset stock via docker mysql; ensure item 1 exists and is active"
-	@docker exec -i mysql mysql -udemo -p123456 hc_business -e "$(RESET_SHOP_BUCKETS_SQL)" 2>/dev/null || echo "[warn] failed to reset stock buckets for item 1; ensure shop_item_stock_buckets table exists (P2-5)"
+	@echo "Resetting stress item 1 stock=$(STRESS_STOCK) in $(DB_DRIVER)(hc_business)..."
+	@$(RESET_STOCK_CMD)
 	@if [ -n "$(ADMIN_TOKEN)" ]; then \
 	  curl -s -o /dev/null -w "[ok] reconciled Redis stock for item 1 (HTTP %{http_code})\n" -X POST "http://localhost:8080/api/v1/admin/shop/items/1/reconcile" -H "X-Admin-Token: $(ADMIN_TOKEN)" 2>/dev/null || echo "[warn] reconcile item 1 failed"; \
 	else \
