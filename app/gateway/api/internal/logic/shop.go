@@ -6,7 +6,7 @@ import (
 
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/svc"
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/types"
-	shoppb "github.com/cdcdx/hc-framework-go/app/shop/rpc/shop"
+	hcpb "github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
@@ -29,7 +29,7 @@ func (l *ShopItemsLogic) ShopItems(req *types.ShopItemsReq) (items any, nextCurs
 	if _, ok := requireUser(l.ctx); !ok {
 		return nil, "", false, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.ShopRpc.Items(l.ctx, &shoppb.ItemsRequest{
+	resp, err := l.svcCtx.HcRpc.ShopItems(l.ctx, &hcpb.ShopItemsRequest{
 		Cursor:   req.Cursor,
 		Limit:    int32(req.Limit),
 		Category: req.Category,
@@ -60,7 +60,7 @@ func (l *ShopRedeemLogic) ShopRedeem(req *types.ShopRedeemReq) (any, error) {
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.ShopRpc.Redeem(l.ctx, &shoppb.RedeemRequest{
+	resp, err := l.svcCtx.HcRpc.ShopRedeem(l.ctx, &hcpb.ShopRedeemRequest{
 		UserId:   uid,
 		ItemId:   req.ItemID,
 		Quantity: req.Quantity,
@@ -91,7 +91,7 @@ func (l *ShopOrdersLogic) ShopOrders(req *types.ShopOrdersReq) (items any, nextC
 	if !ok {
 		return nil, "", false, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.ShopRpc.Orders(l.ctx, &shoppb.OrdersRequest{
+	resp, err := l.svcCtx.HcRpc.ShopOrders(l.ctx, &hcpb.ShopOrdersRequest{
 		UserId: uid,
 		Cursor: req.Cursor,
 		Limit:  int32(req.Limit),
@@ -122,7 +122,7 @@ func (l *ShopOrderDetailLogic) ShopOrderDetail(req *types.ShopOrderDetailReq) (a
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.ShopRpc.OrderDetail(l.ctx, &shoppb.OrderDetailRequest{
+	resp, err := l.svcCtx.HcRpc.ShopOrderDetail(l.ctx, &hcpb.ShopOrderDetailRequest{
 		UserId:  uid,
 		OrderId: req.ID,
 	})
@@ -151,7 +151,7 @@ func (l *ShopFlashActivitiesLogic) ShopFlashActivities(req *types.FlashActivitie
 	if _, ok := requireUser(l.ctx); !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.ShopRpc.FlashActivities(l.ctx, &shoppb.FlashActivitiesRequest{
+	resp, err := l.svcCtx.HcRpc.FlashActivities(l.ctx, &hcpb.FlashActivitiesRequest{
 		Limit: int32(req.Limit),
 	})
 	if err != nil {
@@ -180,7 +180,7 @@ func (l *ShopFlashRedeemLogic) ShopFlashRedeem(req *types.FlashRedeemReq) (any, 
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.ShopRpc.FlashRedeem(l.ctx, &shoppb.FlashRedeemRequest{
+	resp, err := l.svcCtx.HcRpc.FlashRedeem(l.ctx, &hcpb.FlashRedeemRequest{
 		UserId:     uid,
 		ActivityId: req.ActivityID,
 	})

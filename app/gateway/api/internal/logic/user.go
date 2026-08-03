@@ -5,7 +5,7 @@ import (
 
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/svc"
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/types"
-	userpb "github.com/cdcdx/hc-framework-go/app/user/rpc/user"
+	hcpb "github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/zeromicro/go-zero/core/logx"
 )
@@ -33,11 +33,12 @@ func (l *GetProfileLogic) GetProfile() (any, error) {
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.UserRpc.GetProfile(l.ctx, &userpb.GetProfileRequest{UserId: uid})
+	resp, err := l.svcCtx.HcRpc.GetProfile(l.ctx, &hcpb.GetProfileRequest{UserId: uid})
 	if err != nil {
 		return nil, err
 	}
-	return toData(resp), nil
+	// 解包专用响应，保持 HTTP data 直接为用户对象（与 gin 版契约一致）
+	return toData(resp.User), nil
 }
 
 // UpdateProfileLogic 更新用户资料
@@ -60,7 +61,7 @@ func (l *UpdateProfileLogic) UpdateProfile(req *types.UpdateProfileReq) (any, er
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.UserRpc.UpdateProfile(l.ctx, &userpb.UpdateProfileRequest{
+	resp, err := l.svcCtx.HcRpc.UpdateProfile(l.ctx, &hcpb.UpdateProfileRequest{
 		UserId:    uid,
 		Username:  req.Username,
 		AvatarUrl: req.AvatarURL,
@@ -68,7 +69,8 @@ func (l *UpdateProfileLogic) UpdateProfile(req *types.UpdateProfileReq) (any, er
 	if err != nil {
 		return nil, err
 	}
-	return toData(resp), nil
+	// 解包专用响应，保持 HTTP data 直接为用户对象（与 gin 版契约一致）
+	return toData(resp.User), nil
 }
 
 // GetPointsLogic 积分余额
@@ -91,7 +93,7 @@ func (l *GetPointsLogic) GetPoints() (any, error) {
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.UserRpc.GetPoints(l.ctx, &userpb.GetPointsRequest{UserId: uid})
+	resp, err := l.svcCtx.HcRpc.GetPoints(l.ctx, &hcpb.GetPointsRequest{UserId: uid})
 	if err != nil {
 		return nil, err
 	}

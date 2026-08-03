@@ -6,7 +6,7 @@ import (
 
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/svc"
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/types"
-	idlepb "github.com/cdcdx/hc-framework-go/app/idle/rpc/idle"
+	hcpb "github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
@@ -30,7 +30,7 @@ func (l *IdleStartLogic) IdleStart(req *types.IdleStartReq) (any, error) {
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.IdleRpc.Start(l.ctx, &idlepb.StartRequest{
+	resp, err := l.svcCtx.HcRpc.IdleStart(l.ctx, &hcpb.IdleStartRequest{
 		UserId:   uid,
 		DeviceId: req.DeviceID,
 	})
@@ -60,7 +60,7 @@ func (l *IdleHeartbeatLogic) IdleHeartbeat(req *types.IdleHeartbeatReq) (any, er
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	_, err := l.svcCtx.IdleRpc.Heartbeat(l.ctx, &idlepb.HeartbeatRequest{
+	_, err := l.svcCtx.HcRpc.IdleHeartbeat(l.ctx, &hcpb.IdleHeartbeatRequest{
 		UserId:   uid,
 		DeviceId: req.DeviceID,
 	})
@@ -90,7 +90,7 @@ func (l *IdleStopLogic) IdleStop() (any, error) {
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.IdleRpc.Stop(l.ctx, &idlepb.StopRequest{UserId: uid})
+	resp, err := l.svcCtx.HcRpc.IdleStop(l.ctx, &hcpb.IdleStopRequest{UserId: uid})
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func (l *IdleStopDeviceLogic) IdleStopDevice(req *types.IdleStopDeviceReq) (any,
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.IdleRpc.StopDevice(l.ctx, &idlepb.StopDeviceRequest{
+	resp, err := l.svcCtx.HcRpc.IdleStopDevice(l.ctx, &hcpb.IdleStopDeviceRequest{
 		UserId:   uid,
 		DeviceId: req.DeviceID,
 	})
@@ -147,7 +147,7 @@ func (l *IdleStatusLogic) IdleStatus() (any, error) {
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.IdleRpc.Status(l.ctx, &idlepb.StatusRequest{UserId: uid})
+	resp, err := l.svcCtx.HcRpc.IdleStatus(l.ctx, &hcpb.IdleStatusRequest{UserId: uid})
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func (l *IdleRecordsLogic) IdleRecords(req *types.IdleRecordsReq) (items any, ne
 	if !ok {
 		return nil, "", false, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.IdleRpc.Records(l.ctx, &idlepb.RecordsRequest{
+	resp, err := l.svcCtx.HcRpc.IdleRecords(l.ctx, &hcpb.IdleRecordsRequest{
 		UserId: uid,
 		Cursor: req.Cursor,
 		Limit:  int32(req.Limit),

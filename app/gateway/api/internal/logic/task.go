@@ -5,7 +5,7 @@ import (
 
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/svc"
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/types"
-	taskpb "github.com/cdcdx/hc-framework-go/app/task/rpc/task"
+	hcpb "github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
@@ -29,7 +29,7 @@ func (l *TaskListLogic) TaskList() (any, error) {
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.TaskRpc.List(l.ctx, &taskpb.ListRequest{UserId: uid})
+	resp, err := l.svcCtx.HcRpc.TaskList(l.ctx, &hcpb.TaskListRequest{UserId: uid})
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func (l *TaskProgressLogic) TaskProgress() (any, error) {
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.TaskRpc.Progress(l.ctx, &taskpb.ProgressRequest{UserId: uid})
+	resp, err := l.svcCtx.HcRpc.TaskProgress(l.ctx, &hcpb.TaskProgressRequest{UserId: uid})
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,7 @@ func (l *TaskClaimLogic) TaskClaim(req *types.TaskClaimReq) (any, error) {
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	resp, err := l.svcCtx.TaskRpc.Claim(l.ctx, &taskpb.ClaimRequest{
+	resp, err := l.svcCtx.HcRpc.TaskClaim(l.ctx, &hcpb.TaskClaimRequest{
 		UserId: uid,
 		TaskId: req.ID,
 	})

@@ -1,0 +1,40 @@
+Name: hc.rpc
+ListenOn: 0.0.0.0:8001
+Etcd:
+  Hosts:
+    - 127.0.0.1:2379
+  Key: hc.rpc
+
+# 数据源（sqlite 零依赖；生产切 mysql/postgres 改 Driver+Dsn）
+DB:
+  Driver: sqlite
+  Dsn: data/hc.db
+
+# JWT 签发（与网关校验共用同一套密钥/算法/issuer，保证 token 互通）
+Jwt:
+  Algorithm: HS256
+  SigningKey: change-me-in-prod
+  Issuer: hc-framework
+  AccessTTL: 1h
+  RefreshTTL: 720h
+  PrivateKeyPath: ""
+  PublicKeyPath: ""
+
+# Google OAuth（未配置时 /auth/google 返回第三方服务未配置错误）
+GoogleOAuth:
+  ClientID: ""
+  ClientSecret: ""
+  RedirectURI: ""
+
+# 挂机业务参数
+Idle:
+  MaxActiveDevices: 3
+  PointsPerMinute: 1
+  DailyPointsLimit: 240
+
+# go-zero 内置治理：链路追踪 / Prometheus 指标 / 日志
+Telemetry:
+  Name: hc.rpc
+Prometheus:
+  Host: 0.0.0.0
+  Port: 9101

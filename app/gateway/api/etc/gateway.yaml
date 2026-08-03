@@ -24,27 +24,12 @@ Security:
   IPLimitEnabled: false
   IPLimitPerMinute: 30
 
-# 依赖 4 个领域 rpc
-UserRpc:
+# 依赖单一领域 rpc
+HcRpc:
   Etcd:
     Hosts:
       - 127.0.0.1:2379
-    Key: user.rpc
-IdleRpc:
-  Etcd:
-    Hosts:
-      - 127.0.0.1:2379
-    Key: idle.rpc
-TaskRpc:
-  Etcd:
-    Hosts:
-      - 127.0.0.1:2379
-    Key: task.rpc
-ShopRpc:
-  Etcd:
-    Hosts:
-      - 127.0.0.1:2379
-    Key: shop.rpc
+    Key: hc.rpc
 
 Prometheus:
   Host: 0.0.0.0

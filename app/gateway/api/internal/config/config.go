@@ -34,8 +34,6 @@ type Config struct {
 		IPLimitPerMinute int
 	}
 
-	UserRpc zrpc.RpcClientConf
-	IdleRpc zrpc.RpcClientConf
-	TaskRpc zrpc.RpcClientConf
-	ShopRpc zrpc.RpcClientConf
+	// HcRpc 单一领域 rpc 客户端（合并 user/idle/task/shop 四个域）
+	HcRpc zrpc.RpcClientConf
 }

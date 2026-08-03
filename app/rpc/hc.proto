@@ -1,0 +1,371 @@
+syntax = "proto3";
+
+package hc;
+
+option go_package = "github.com/cdcdx/hc-framework-go/app/rpc/hc";
+
+// Hc 单一领域 rpc：合并 user / idle / task / shop 四个领域（2 进程架构：网关 + 本 rpc）。
+// 方法名按领域加前缀（Idle*/Task*/Shop*），user 域方法名本身域特定故不加前缀。
+// 域间协作（积分增减 / 任务进度）在进程内直接调用，不再走跨 rpc。
+service Hc {
+  // ================= user 域：认证 + 用户 + 积分 =================
+  // 邮箱注册，成功直接签发 token 对
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // 邮箱密码登录
+  rpc Login(LoginRequest) returns (LoginResponse);
+  // Google OAuth 登录/注册
+  rpc GoogleOAuth(GoogleOAuthRequest) returns (GoogleOAuthResponse);
+  // 刷新 token
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+  // 修改密码（校验旧密码，并使已签发 token 失效）
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+  // 用户资料
+  rpc GetProfile(GetProfileRequest) returns (GetProfileResponse);
+  rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
+  // 积分余额
+  rpc GetPoints(GetPointsRequest) returns (GetPointsResponse);
+  // 加分（挂机/任务奖励入账）
+  rpc AddPoints(AddPointsRequest) returns (AddPointsResponse);
+  // 扣分（兑换扣款，余额不足报错）
+  rpc DeductPoints(DeductPointsRequest) returns (DeductPointsResponse);
+
+  // ================= idle 域：挂机 =================
+  // 开始挂机（同设备幂等续期；设备数量超限报错）
+  rpc IdleStart(IdleStartRequest) returns (IdleRecord);
+  // 心跳上报（更新最后心跳时间）
+  rpc IdleHeartbeat(IdleHeartbeatRequest) returns (Empty);
+  // 停止全部设备挂机并结算
+  rpc IdleStop(IdleStopRequest) returns (IdleRecord);
+  // 停止指定设备挂机并结算
+  rpc IdleStopDevice(IdleStopDeviceRequest) returns (IdleRecord);
+  // 挂机状态（活跃会话 + 今日已赚积分）
+  rpc IdleStatus(IdleStatusRequest) returns (IdleStatusResponse);
+  // 历史记录（游标分页）
+  rpc IdleRecords(IdleRecordsRequest) returns (IdleRecordsResponse);
+
+  // ================= task 域：任务 =================
+  // 任务列表（含当前用户进度）
+  rpc TaskList(TaskListRequest) returns (TaskListResponse);
+  // 进度总览
+  rpc TaskProgress(TaskProgressRequest) returns (TaskProgressResponse);
+  // 领取任务奖励（进程内调用 AddPoints 入账）
+  rpc TaskClaim(TaskClaimRequest) returns (TaskClaimResponse);
+  // 上报进度增量（登录/挂机结算/兑换完成事件驱动）
+  rpc ReportProgress(ReportProgressRequest) returns (Empty);
+
+  // ================= shop 域：商城 + 抢购 =================
+  // 商品列表（游标分页 + 分类筛选）
+  rpc ShopItems(ShopItemsRequest) returns (ShopItemsResponse);
+  // 积分兑换（扣积分 + 扣库存 + 建单）
+  rpc ShopRedeem(ShopRedeemRequest) returns (RedeemResponse);
+  // 兑换订单列表
+  rpc ShopOrders(ShopOrdersRequest) returns (ShopOrdersResponse);
+  // 订单详情（校验归属）
+  rpc ShopOrderDetail(ShopOrderDetailRequest) returns (OrderInfo);
+  // 进行中的抢购活动列表
+  rpc FlashActivities(FlashActivitiesRequest) returns (FlashActivitiesResponse);
+  // 定时抢购（限量内入库，超出直接拒绝）
+  rpc FlashRedeem(FlashRedeemRequest) returns (RedeemResponse);
+}
+
+message Empty {}
+
+// ---------- user 域 ----------
+message UserInfo {
+  string user_id = 1;
+  string username = 2;
+  string email = 3;
+  string avatar_url = 4;
+  int64 points_balance = 5;
+  string status = 6;
+  int64 created_at = 7; // unix 秒
+}
+
+message RegisterRequest {
+  string username = 1; // 可选
+  string email = 2;
+  string password = 3;
+}
+
+message RegisterResponse {
+  UserInfo user = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+}
+
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  UserInfo user = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+}
+
+message GoogleOAuthRequest {
+  string code = 1;
+}
+
+message GoogleOAuthResponse {
+  UserInfo user = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+}
+
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message RefreshTokenResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+}
+
+message ChangePasswordRequest {
+  string user_id = 1;
+  string old_password = 2;
+  string new_password = 3;
+}
+
+message ChangePasswordResponse {}
+
+message GetProfileRequest {
+  string user_id = 1;
+}
+
+message GetProfileResponse {
+  UserInfo user = 1;
+}
+
+message UpdateProfileRequest {
+  string user_id = 1;
+  string username = 2;   // 可选，<=50
+  string avatar_url = 3; // 可选，<=500
+}
+
+message UpdateProfileResponse {
+  UserInfo user = 1;
+}
+
+message GetPointsRequest {
+  string user_id = 1;
+}
+
+message GetPointsResponse {
+  string user_id = 1;
+  int64 points_balance = 2;
+}
+
+message AddPointsRequest {
+  string user_id = 1;
+  int64 points = 2;   // >0 加分
+  string reason = 3;
+}
+
+message AddPointsResponse {
+  string user_id = 1;
+  int64 points_balance = 2;
+}
+
+message DeductPointsRequest {
+  string user_id = 1;
+  int64 points = 2; // >0 扣分
+  string reason = 3;
+}
+
+message DeductPointsResponse {
+  string user_id = 1;
+  int64 points_balance = 2;
+}
+
+// ---------- idle 域 ----------
+message IdleRecord {
+  int64 id = 1;
+  string user_id = 2;
+  string device_id = 3;
+  int64 start_time = 4;         // unix 秒
+  int64 end_time = 5;           // unix 秒；0 = 未结束
+  int32 duration_seconds = 6;
+  int64 points_earned = 7;
+  string status = 8;            // active / completed / timeout
+  int64 last_heartbeat_at = 9;  // unix 秒
+}
+
+message IdleStartRequest {
+  string user_id = 1;
+  string device_id = 2;
+}
+
+message IdleHeartbeatRequest {
+  string user_id = 1;
+  string device_id = 2;
+}
+
+message IdleStopRequest {
+  string user_id = 1;
+}
+
+message IdleStopDeviceRequest {
+  string user_id = 1;
+  string device_id = 2;
+}
+
+message IdleStatusRequest {
+  string user_id = 1;
+}
+
+message IdleStatusResponse {
+  repeated IdleRecord records = 1;
+  int64 today_points = 2; // 今日已赚积分
+}
+
+message IdleRecordsRequest {
+  string user_id = 1;
+  int64 cursor = 2; // 上一页最后一条记录 ID；0 = 第一页
+  int32 limit = 3;  // 默认 20
+}
+
+message IdleRecordsResponse {
+  repeated IdleRecord records = 1;
+  int64 next_cursor = 2;
+  bool has_more = 3;
+}
+
+// ---------- task 域 ----------
+message TaskInfo {
+  int64 id = 1;
+  string task_type = 2;      // daily / weekly / achievement
+  string task_key = 3;       // 业务 key，如 daily_idle_30
+  string task_name = 4;
+  int32 target_value = 5;
+  int64 reward_points = 6;
+  bool is_active = 7;
+  int32 current_progress = 8;
+  bool is_completed = 9;
+  bool is_claimed = 10;
+  string period = 11;        // 当前周期（如 2026-01-02 / 2026-W01 / all）
+}
+
+message TaskListRequest {
+  string user_id = 1;
+}
+
+message TaskListResponse {
+  repeated TaskInfo tasks = 1;
+}
+
+message TaskProgressRequest {
+  string user_id = 1;
+}
+
+message TaskProgressResponse {
+  repeated TaskInfo tasks = 1;
+}
+
+message TaskClaimRequest {
+  string user_id = 1;
+  int64 task_id = 2;
+}
+
+message TaskClaimResponse {
+  TaskInfo task = 1;
+  int64 reward_points = 2;
+}
+
+message ReportProgressRequest {
+  string user_id = 1;
+  string task_key = 2; // 命中 task_key 的任务累加
+  int32 delta = 3;     // 增量（默认 1）
+}
+
+// ---------- shop 域 ----------
+message ItemInfo {
+  int64 id = 1;
+  string name = 2;
+  string description = 3;
+  int64 price_points = 4;
+  int32 stock = 5;
+  string image_url = 6;
+  string category = 7;
+  bool is_active = 8;
+  string sales_status = 9; // offline / on_sale / sold_out（派生展示）
+}
+
+message ShopItemsRequest {
+  int64 cursor = 1;  // 上一页最后一条 ID；0 = 第一页
+  int32 limit = 2;   // 默认 20
+  string category = 3;
+}
+
+message ShopItemsResponse {
+  repeated ItemInfo items = 1;
+  int64 next_cursor = 2;
+  bool has_more = 3;
+}
+
+message ShopRedeemRequest {
+  string user_id = 1;
+  int64 item_id = 2;
+  int32 quantity = 3; // 默认 1
+}
+
+message RedeemResponse {
+  OrderInfo order = 1;
+}
+
+message OrderInfo {
+  int64 id = 1;
+  string user_id = 2;
+  int64 item_id = 3;
+  string item_name = 4;
+  int64 points_spent = 5;
+  string order_status = 6; // pending / completed / cancelled
+  int64 activity_id = 7;   // 0 = 普通兑换
+  int64 created_at = 8;
+}
+
+message ShopOrdersRequest {
+  string user_id = 1;
+  int64 cursor = 2;
+  int32 limit = 3;
+}
+
+message ShopOrdersResponse {
+  repeated OrderInfo orders = 1;
+  int64 next_cursor = 2;
+  bool has_more = 3;
+}
+
+message ShopOrderDetailRequest {
+  string user_id = 1;
+  int64 order_id = 2;
+}
+
+message FlashActivityInfo {
+  int64 id = 1;
+  int64 item_id = 2;
+  string name = 3;
+  int64 start_time = 4; // unix 秒
+  int64 end_time = 5;   // unix 秒；0 = 不限结束
+  int32 limit_qty = 6;
+  int32 sold_qty = 7;
+  int32 per_user_limit = 8;
+  int64 price_points = 9;
+  string status = 10;       // active / ended / pending
+  string sales_status = 11; // presale / on_sale / sold_out / ended（派生展示）
+}
+
+message FlashActivitiesRequest {
+  int32 limit = 1; // 默认 20
+}
+
+message FlashActivitiesResponse {
+  repeated FlashActivityInfo activities = 1;
+}
+
+message FlashRedeemRequest {
+  string user_id = 1;
+  int64 activity_id = 2;
+}

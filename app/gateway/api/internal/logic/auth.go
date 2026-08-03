@@ -5,8 +5,7 @@ import (
 
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/svc"
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/types"
-	taskpb "github.com/cdcdx/hc-framework-go/app/task/rpc/task"
-	userpb "github.com/cdcdx/hc-framework-go/app/user/rpc/user"
+	hcpb "github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
 )
@@ -27,7 +26,7 @@ func NewRegisterLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Register
 }
 
 func (l *RegisterLogic) Register(req *types.RegisterReq) (any, error) {
-	resp, err := l.svcCtx.UserRpc.Register(l.ctx, &userpb.RegisterRequest{
+	resp, err := l.svcCtx.HcRpc.Register(l.ctx, &hcpb.RegisterRequest{
 		Email:    req.Email,
 		Password: req.Password,
 		Username: req.Username,
@@ -54,7 +53,7 @@ func NewLoginLogic(ctx context.Context, svcCtx *svc.ServiceContext) *LoginLogic 
 }
 
 func (l *LoginLogic) Login(req *types.LoginReq) (any, error) {
-	resp, err := l.svcCtx.UserRpc.Login(l.ctx, &userpb.LoginRequest{
+	resp, err := l.svcCtx.HcRpc.Login(l.ctx, &hcpb.LoginRequest{
 		Email:    req.Email,
 		Password: req.Password,
 	})
@@ -64,7 +63,7 @@ func (l *LoginLogic) Login(req *types.LoginReq) (any, error) {
 
 	// 每日登录任务（失败不阻塞登录）
 	if resp.User != nil {
-		if _, err := l.svcCtx.TaskRpc.ReportProgress(l.ctx, &taskpb.ReportProgressRequest{
+		if _, err := l.svcCtx.HcRpc.ReportProgress(l.ctx, &hcpb.ReportProgressRequest{
 			UserId:  resp.User.UserId,
 			TaskKey: model.TaskKeyDailyLogin,
 			Delta:   1,
@@ -92,7 +91,7 @@ func NewGoogleOAuthLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Googl
 }
 
 func (l *GoogleOAuthLogic) GoogleOAuth(req *types.GoogleOAuthReq) (any, error) {
-	resp, err := l.svcCtx.UserRpc.GoogleOAuth(l.ctx, &userpb.GoogleOAuthRequest{Code: req.Code})
+	resp, err := l.svcCtx.HcRpc.GoogleOAuth(l.ctx, &hcpb.GoogleOAuthRequest{Code: req.Code})
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +114,7 @@ func NewRefreshTokenLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Refr
 }
 
 func (l *RefreshTokenLogic) RefreshToken(req *types.RefreshTokenReq) (any, error) {
-	resp, err := l.svcCtx.UserRpc.RefreshToken(l.ctx, &userpb.RefreshTokenRequest{
+	resp, err := l.svcCtx.HcRpc.RefreshToken(l.ctx, &hcpb.RefreshTokenRequest{
 		RefreshToken: req.RefreshToken,
 	})
 	if err != nil {
@@ -144,7 +143,7 @@ func (l *ChangePasswordLogic) ChangePassword(req *types.ChangePasswordReq) (any,
 	if !ok {
 		return nil, errUserUnauthorized
 	}
-	_, err := l.svcCtx.UserRpc.ChangePassword(l.ctx, &userpb.ChangePasswordRequest{
+	_, err := l.svcCtx.HcRpc.ChangePassword(l.ctx, &hcpb.ChangePasswordRequest{
 		UserId:      uid,
 		OldPassword: req.OldPassword,
 		NewPassword: req.NewPassword,
