@@ -45,7 +45,7 @@ run-gateway:
 build:
 	mkdir -p $(BIN)
 	cd app/rpc && go build -o ../../$(BIN)/hc-rpc ./cmd
-	cd app/gateway/api && go build -o ../../$(BIN)/gateway-api gateway.go
+	cd app/gateway/api && go build -o ../../../$(BIN)/gateway-api gateway.go
 	@echo "构建完成: $(BIN)/"
 
 # ---------- 测试与检查 ----------
