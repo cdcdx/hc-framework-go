@@ -27,7 +27,7 @@ func NewReportProgressLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Re
 	}
 }
 
-func (l *ReportProgressLogic) ReportProgress(in *hc.ReportProgressRequest) (*hc.ReportProgressResponse, error) {
+func (l *ReportProgressLogic) ReportProgress(in *hc.ReportProgressRequest) (*hc.Empty, error) {
 	if in.Delta <= 0 {
 		return nil, errorx.New(errorx.CodeInvalidParam, "delta must be positive")
 	}
@@ -56,10 +56,7 @@ func (l *ReportProgressLogic) ReportProgress(in *hc.ReportProgressRequest) (*hc.
 
 	// 已完成且已领取的，不再累加
 	if pro.IsClaimed {
-		return &hc.ReportProgressResponse{
-			Task:      toTaskInfo(&define, &pro, period),
-			Completed: pro.IsCompleted,
-		}, nil
+		return &hc.Empty{}, nil
 	}
 
 	pro.CurrentProgress += int(in.Delta)
@@ -72,8 +69,5 @@ func (l *ReportProgressLogic) ReportProgress(in *hc.ReportProgressRequest) (*hc.
 		return nil, errorx.New(errorx.CodeDBError, err.Error())
 	}
 
-	return &hc.ReportProgressResponse{
-		Task:      toTaskInfo(&define, &pro, period),
-		Completed: pro.IsCompleted,
-	}, nil
+	return &hc.Empty{}, nil
 }

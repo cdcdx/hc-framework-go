@@ -21,6 +21,24 @@ type ServiceContext struct {
 	CaptchaProvider captcha.CaptchaProvider
 }
 
+func newCaptchaProvider(c config.Config) captcha.CaptchaProvider {
+	if !c.Captcha.Enabled {
+		return &captcha.NoopVerifier{}
+	}
+	switch c.Captcha.Provider {
+	case "turnstile":
+		return captcha.NewTurnstileVerifier(c.Captcha.SiteKey, c.Captcha.SecretKey)
+	case "recaptcha":
+		return captcha.NewReCAPTCHAVerifier(c.Captcha.SiteKey, c.Captcha.SecretKey)
+	case "hcaptcha":
+		return captcha.NewhCAPTCHAVerifier(c.Captcha.SiteKey, c.Captcha.SecretKey)
+	case "tencent":
+		return captcha.NewTencentVerifier(c.Captcha.AppID, c.Captcha.SecretKey)
+	default:
+		return &captcha.NoopVerifier{}
+	}
+}
+
 // NewServiceContext 装配全部依赖
 func NewServiceContext(c config.Config) *ServiceContext {
 	mgr, err := jwt.NewManager(

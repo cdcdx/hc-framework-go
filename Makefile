@@ -6,7 +6,7 @@ SHELL := /bin/bash
 
 BIN := bin
 
-.PHONY: help gen tidy run build test lint
+.PHONY: help gen tidy run build test lint kill
 
 help:
 	@echo "HC Framework (go-zero) 常用命令:"
@@ -19,8 +19,11 @@ help:
 
 # ---------- 代码生成 ----------
 # rpc pb 代码(手写的 server/logic/svc/client 依赖这些生成文件)
+# 通过 go env GOPATH 动态定位 protoc 插件，确保跨环境可用
 gen:
-	protoc --go_out=. --go_opt=paths=source_relative \
+	protoc --plugin=protoc-gen-go="$$(go env GOPATH)/bin/protoc-gen-go" \
+	       --plugin=protoc-gen-go-grpc="$$(go env GOPATH)/bin/protoc-gen-go-grpc" \
+	       --go_out=. --go_opt=paths=source_relative \
 	       --go-grpc_out=. --go-grpc_opt=paths=source_relative \
 	       app/rpc/hc.proto
 	@echo "pb 代码生成完成。网关 routes/handler/types 为手写,无需 goctl 重建;"
@@ -52,3 +55,10 @@ test:
 lint:
 	go vet ./...
 	gofmt -l .
+
+# ---------- 停止服务 ----------
+kill:
+	@echo "停止 hc-rpc (8001) 和 gateway-api (8080)..."
+	@-fuser -k 8001/tcp 2>/dev/null && echo "  已释放 8001 (hc-rpc)" || echo "  8001 空闲"
+	@-fuser -k 8080/tcp 2>/dev/null && echo "  已释放 8080 (gateway-api)" || echo "  8080 空闲"
+	@echo "完成"

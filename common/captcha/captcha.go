@@ -8,3 +8,11 @@ type CaptchaProvider interface {
 	// GetScriptSrc 获取前端脚本地址
 	GetScriptSrc() string
 }
+
+// NoopVerifier 空验证器：不校验，直接通过
+type NoopVerifier struct{}
+
+func (n *NoopVerifier) Verify(token, remoteIP string) (bool, error) { return true, nil }
+func (n *NoopVerifier) GetScriptSrc() string                        { return "" }
+
+var _ CaptchaProvider = (*NoopVerifier)(nil)
