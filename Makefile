@@ -36,7 +36,7 @@ tidy:
 run: run-hc run-gateway
 
 run-hc:
-	cd app/rpc && go run hc.go -f etc/hc.yaml
+	cd app/rpc && go run ./cmd -f etc/hc.yaml
 
 run-gateway:
 	cd app/gateway/api && go run gateway.go -f etc/gateway.yaml
@@ -44,7 +44,7 @@ run-gateway:
 # ---------- 构建 ----------
 build:
 	mkdir -p $(BIN)
-	cd app/rpc && go build -o ../../$(BIN)/hc-rpc hc.go
+	cd app/rpc && go build -o ../../$(BIN)/hc-rpc ./cmd
 	cd app/gateway/api && go build -o ../../$(BIN)/gateway-api gateway.go
 	@echo "构建完成: $(BIN)/"
 
