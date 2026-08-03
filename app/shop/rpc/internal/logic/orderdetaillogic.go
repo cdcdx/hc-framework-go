@@ -26,7 +26,7 @@ func NewOrderDetailLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Order
 	}
 }
 
-func (l *OrderDetailLogic) OrderDetail(in *shop.OrderDetailRequest) (*shop.OrderInfo, error) {
+func (l *OrderDetailLogic) OrderDetail(in *shop.OrderDetailRequest) (*shop.OrderDetailResponse, error) {
 	var order model.RedeemOrder
 	err := l.svcCtx.Db.Where("id = ?", in.OrderId).First(&order).Error
 	if err == gorm.ErrRecordNotFound {
@@ -41,5 +41,5 @@ func (l *OrderDetailLogic) OrderDetail(in *shop.OrderDetailRequest) (*shop.Order
 		return nil, errorx.New(errorx.CodePermissionDenied)
 	}
 
-	return toOrderInfo(&order), nil
+	return &shop.OrderDetailResponse{Order: toOrderInfo(&order)}, nil
 }

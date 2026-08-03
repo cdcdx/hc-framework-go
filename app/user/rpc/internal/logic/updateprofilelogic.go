@@ -26,7 +26,7 @@ func NewUpdateProfileLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Upd
 	}
 }
 
-func (l *UpdateProfileLogic) UpdateProfile(in *user.UpdateProfileRequest) (*user.UserInfo, error) {
+func (l *UpdateProfileLogic) UpdateProfile(in *user.UpdateProfileRequest) (*user.UpdateProfileResponse, error) {
 	var u model.User
 	err := l.svcCtx.Db.Where("user_id = ?", in.UserId).First(&u).Error
 	if err == gorm.ErrRecordNotFound {
@@ -50,7 +50,7 @@ func (l *UpdateProfileLogic) UpdateProfile(in *user.UpdateProfileRequest) (*user
 		updates["avatar_url"] = in.AvatarUrl
 	}
 	if len(updates) == 0 {
-		return toUserInfo(&u), nil
+		return &user.UpdateProfileResponse{User: toUserInfo(&u)}, nil
 	}
 
 	if err := l.svcCtx.Db.Model(&u).Updates(updates).Error; err != nil {
@@ -60,5 +60,5 @@ func (l *UpdateProfileLogic) UpdateProfile(in *user.UpdateProfileRequest) (*user
 	if err := l.svcCtx.Db.Where("user_id = ?", u.UserID).First(&u).Error; err != nil {
 		return nil, errorx.New(errorx.CodeDBError, err.Error())
 	}
-	return toUserInfo(&u), nil
+	return &user.UpdateProfileResponse{User: toUserInfo(&u)}, nil
 }

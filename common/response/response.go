@@ -32,7 +32,7 @@ func getTraceID(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
-	return trace.TraceIdFromContext(r.Context())
+	return trace.TraceIDFromContext(r.Context())
 }
 
 // resolveMsg 解析错误消息：优先自定义消息，否则回退错误码默认消息

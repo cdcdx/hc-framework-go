@@ -26,7 +26,7 @@ func NewGetProfileLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetPro
 	}
 }
 
-func (l *GetProfileLogic) GetProfile(in *user.GetProfileRequest) (*user.UserInfo, error) {
+func (l *GetProfileLogic) GetProfile(in *user.GetProfileRequest) (*user.GetProfileResponse, error) {
 	var u model.User
 	err := l.svcCtx.Db.Where("user_id = ?", in.UserId).First(&u).Error
 	if err == gorm.ErrRecordNotFound {
@@ -35,5 +35,5 @@ func (l *GetProfileLogic) GetProfile(in *user.GetProfileRequest) (*user.UserInfo
 	if err != nil {
 		return nil, errorx.New(errorx.CodeDBError, err.Error())
 	}
-	return toUserInfo(&u), nil
+	return &user.GetProfileResponse{User: toUserInfo(&u)}, nil
 }

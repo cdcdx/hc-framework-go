@@ -47,7 +47,7 @@ type googleUserInfo struct {
 	Picture string `json:"picture"`
 }
 
-func (l *GoogleOAuthLogic) GoogleOAuth(in *user.GoogleOAuthRequest) (*user.LoginResponse, error) {
+func (l *GoogleOAuthLogic) GoogleOAuth(in *user.GoogleOAuthRequest) (*user.GoogleOAuthResponse, error) {
 	if in.Code == "" {
 		return nil, errorx.New(errorx.CodeInvalidParam, "code is required")
 	}
@@ -106,7 +106,7 @@ func (l *GoogleOAuthLogic) GoogleOAuth(in *user.GoogleOAuthRequest) (*user.Login
 		return nil, errorx.New(errorx.CodeUnknownError, err.Error())
 	}
 
-	return &user.LoginResponse{
+	return &user.GoogleOAuthResponse{
 		User:         toUserInfo(u),
 		AccessToken:  access,
 		RefreshToken: refresh,

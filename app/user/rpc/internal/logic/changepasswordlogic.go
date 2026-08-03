@@ -28,7 +28,7 @@ func NewChangePasswordLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Ch
 	}
 }
 
-func (l *ChangePasswordLogic) ChangePassword(in *user.ChangePasswordRequest) (*user.Empty, error) {
+func (l *ChangePasswordLogic) ChangePassword(in *user.ChangePasswordRequest) (*user.ChangePasswordResponse, error) {
 	if in.OldPassword == "" || in.NewPassword == "" {
 		return nil, errorx.New(errorx.CodeInvalidParam, "old_password and new_password are required")
 	}
@@ -62,5 +62,5 @@ func (l *ChangePasswordLogic) ChangePassword(in *user.ChangePasswordRequest) (*u
 		return nil, errorx.New(errorx.CodeDBError, err.Error())
 	}
 
-	return &user.Empty{}, nil
+	return &user.ChangePasswordResponse{}, nil
 }

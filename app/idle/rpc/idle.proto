@@ -2,22 +2,15 @@ syntax = "proto3";
 
 package idle;
 
-option go_package = "./idle";
+option go_package = "github.com/cdcdx/hc-framework-go/app/idle/rpc/idle";
 
-// Idle 挂机领域服务：多设备挂机会话管理 + 时长结算。
-// 结算产出的积分通过调用 user-rpc AddPoints 入账（跨 rpc 调用，见 internal/svc）。
+// 挂机服务
 service Idle {
-  // 开始挂机（同设备幂等续期；设备数量超限报错）
   rpc Start(StartRequest) returns (IdleRecord);
-  // 心跳上报（更新最后心跳时间，惰性结算已达成的时长档位）
   rpc Heartbeat(HeartbeatRequest) returns (Empty);
-  // 停止全部设备挂机并结算
   rpc Stop(StopRequest) returns (IdleRecord);
-  // 停止指定设备挂机并结算
   rpc StopDevice(StopDeviceRequest) returns (IdleRecord);
-  // 挂机状态（活跃会话 + 今日已赚积分）
   rpc Status(StatusRequest) returns (StatusResponse);
-  // 历史记录（游标分页）
   rpc Records(RecordsRequest) returns (RecordsResponse);
 }
 
@@ -27,12 +20,12 @@ message IdleRecord {
   int64 id = 1;
   string user_id = 2;
   string device_id = 3;
-  int64 start_time = 4;         // unix 秒
-  int64 end_time = 5;           // unix 秒；0 = 未结束
+  int64 start_time = 4;
+  int64 end_time = 5;
   int32 duration_seconds = 6;
   int64 points_earned = 7;
-  string status = 8;            // active / completed / timeout
-  int64 last_heartbeat_at = 9;  // unix 秒
+  string status = 8;
+  int64 last_heartbeat_at = 9;
 }
 
 message StartRequest {
@@ -60,13 +53,13 @@ message StatusRequest {
 
 message StatusResponse {
   repeated IdleRecord records = 1;
-  int64 today_points = 2; // 今日已赚积分（结算与每日上限共用）
+  int64 today_points = 2;
 }
 
 message RecordsRequest {
   string user_id = 1;
-  int64 cursor = 2; // 上一页最后一条记录 ID；0 = 第一页
-  int32 limit = 3;  // 默认 20
+  int64 cursor = 2;
+  int32 limit = 3;
 }
 
 message RecordsResponse {

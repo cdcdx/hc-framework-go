@@ -29,7 +29,7 @@ func NewFlashRedeemLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Flash
 	}
 }
 
-func (l *FlashRedeemLogic) FlashRedeem(in *shop.FlashRedeemRequest) (*shop.RedeemResponse, error) {
+func (l *FlashRedeemLogic) FlashRedeem(in *shop.FlashRedeemRequest) (*shop.FlashRedeemResponse, error) {
 	var act model.ShopFlashActivity
 	err := l.svcCtx.Db.Where("id = ?", in.ActivityId).First(&act).Error
 	if err == gorm.ErrRecordNotFound {
@@ -121,5 +121,5 @@ func (l *FlashRedeemLogic) FlashRedeem(in *shop.FlashRedeemRequest) (*shop.Redee
 		}
 	}
 
-	return &shop.RedeemResponse{Order: toOrderInfo(order)}, nil
+	return &shop.FlashRedeemResponse{Order: toOrderInfo(order)}, nil
 }

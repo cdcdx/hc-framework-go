@@ -4,7 +4,10 @@
 package errorx
 
 import (
-	zerr "github.com/zeromicro/go-zero/core/errorx"
+	"fmt"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // 业务错误码（与 gin 版保持一致）
@@ -134,12 +137,12 @@ func New(code int, msg ...string) error {
 	if m == "" {
 		m = Message(code)
 	}
-	return zerr.New(code, m)
+	return status.Error(codes.Code(code), m)
 }
 
 // Newf 同 New，支持格式化消息。
 func Newf(code int, format string, args ...any) error {
-	return zerr.Newf(code, format, args...)
+	return status.Error(codes.Code(code), fmt.Sprintf(format, args...))
 }
 
 // Code 从 error（含跨 rpc 传来的 error）解析业务错误码；
@@ -148,8 +151,8 @@ func Code(err error) int {
 	if err == nil {
 		return CodeSuccess
 	}
-	if code, ok := zerr.CodeFromError(err); ok {
-		return code
+	if st, ok := status.FromError(err); ok && st != nil {
+		return int(st.Code())
 	}
 	return CodeUnknownError
 }
@@ -160,8 +163,10 @@ func Msg(err error) string {
 	if err == nil {
 		return Message(CodeSuccess)
 	}
-	if msg := zerr.MsgFromError(err); msg != "" {
-		return msg
+	if st, ok := status.FromError(err); ok && st != nil {
+		if st.Message() != "" {
+			return st.Message()
+		}
 	}
 	return Message(Code(err))
 }

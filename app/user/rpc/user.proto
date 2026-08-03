@@ -2,33 +2,21 @@ syntax = "proto3";
 
 package user;
 
-option go_package = "./user";
+option go_package = "github.com/cdcdx/hc-framework-go/app/user/rpc/user";
 
-// User 用户领域服务：认证（注册/登录/刷新/改密）+ 用户信息 + 积分账户。
-// 积分增减对外暴露 rpc（AddPoints/DeductPoints），供 idle-rpc / task-rpc / shop-rpc 结算时调用。
+// 用户服务
 service User {
-  // 邮箱注册，成功直接签发 token 对
   rpc Register(RegisterRequest) returns (RegisterResponse);
-  // 邮箱密码登录
   rpc Login(LoginRequest) returns (LoginResponse);
-  // Google OAuth 登录/注册
-  rpc GoogleOAuth(GoogleOAuthRequest) returns (LoginResponse);
-  // 刷新 token
+  rpc GoogleOAuth(GoogleOAuthRequest) returns (GoogleOAuthResponse);
   rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
-  // 修改密码（校验旧密码，并使已签发 token 失效）
-  rpc ChangePassword(ChangePasswordRequest) returns (Empty);
-  // 用户资料
-  rpc GetProfile(GetProfileRequest) returns (UserInfo);
-  rpc UpdateProfile(UpdateProfileRequest) returns (UserInfo);
-  // 积分余额
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+  rpc GetProfile(GetProfileRequest) returns (GetProfileResponse);
+  rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
   rpc GetPoints(GetPointsRequest) returns (GetPointsResponse);
-  // 加分（挂机/任务奖励入账；负值校验在服务端）
   rpc AddPoints(AddPointsRequest) returns (AddPointsResponse);
-  // 扣分（兑换扣款，余额不足报错）
   rpc DeductPoints(DeductPointsRequest) returns (DeductPointsResponse);
 }
-
-message Empty {}
 
 message UserInfo {
   string user_id = 1;
@@ -37,13 +25,13 @@ message UserInfo {
   string avatar_url = 4;
   int64 points_balance = 5;
   string status = 6;
-  int64 created_at = 7; // unix 秒
+  int64 created_at = 7;
 }
 
 message RegisterRequest {
-  string email = 1;
-  string password = 2;
-  string username = 3; // 可选
+  string username = 1;
+  string email = 2;
+  string password = 3;
 }
 
 message RegisterResponse {
@@ -67,6 +55,12 @@ message GoogleOAuthRequest {
   string code = 1;
 }
 
+message GoogleOAuthResponse {
+  UserInfo user = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+}
+
 message RefreshTokenRequest {
   string refresh_token = 1;
 }
@@ -82,14 +76,24 @@ message ChangePasswordRequest {
   string new_password = 3;
 }
 
+message ChangePasswordResponse {}
+
 message GetProfileRequest {
   string user_id = 1;
 }
 
+message GetProfileResponse {
+  UserInfo user = 1;
+}
+
 message UpdateProfileRequest {
   string user_id = 1;
-  string username = 2;   // 可选，<=50
-  string avatar_url = 3; // 可选，<=500
+  string username = 2;
+  string avatar_url = 3;
+}
+
+message UpdateProfileResponse {
+  UserInfo user = 1;
 }
 
 message GetPointsRequest {
@@ -103,20 +107,22 @@ message GetPointsResponse {
 
 message AddPointsRequest {
   string user_id = 1;
-  int64 points = 2;   // >0 加分
+  int64 points = 2;
   string reason = 3;
 }
 
 message AddPointsResponse {
-  int64 points_balance = 1;
+  string user_id = 1;
+  int64 points_balance = 2;
 }
 
 message DeductPointsRequest {
   string user_id = 1;
-  int64 points = 2; // >0 扣分
+  int64 points = 2;
   string reason = 3;
 }
 
 message DeductPointsResponse {
-  int64 points_balance = 1;
+  string user_id = 1;
+  int64 points_balance = 2;
 }

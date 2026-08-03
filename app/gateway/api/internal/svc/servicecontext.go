@@ -39,10 +39,10 @@ func NewServiceContext(c config.Config) *ServiceContext {
 
 	return &ServiceContext{
 		Config:          c,
-		UserRpc:         userclient.NewUser(zrpc.MustNewClient(c.UserRpc)),
-		IdleRpc:         idleclient.NewIdle(zrpc.MustNewClient(c.IdleRpc)),
-		TaskRpc:         taskclient.NewTask(zrpc.MustNewClient(c.TaskRpc)),
-		ShopRpc:         shopclient.NewShop(zrpc.MustNewClient(c.ShopRpc)),
+		UserRpc:         userclient.NewUser(zrpc.MustNewClient(c.UserRpc).Conn()),
+		IdleRpc:         idleclient.NewIdle(zrpc.MustNewClient(c.IdleRpc).Conn()),
+		TaskRpc:         taskclient.NewTask(zrpc.MustNewClient(c.TaskRpc).Conn()),
+		ShopRpc:         shopclient.NewShop(zrpc.MustNewClient(c.ShopRpc).Conn()),
 		JwtMgr:          mgr,
 		CaptchaProvider: newCaptchaProvider(c),
 	}
