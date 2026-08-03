@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package shop;
+
+option go_package = "./shop";
+
+// Shop 商城领域服务：商品 + 积分兑换 + 定时抢购。
+// 兑换/抢购扣款通过调用 user-rpc DeductPoints 完成（积分与库存分离保证）。
+service Shop {
+  // 商品列表（游标分页 + 分类筛选）
+  rpc Items(ItemsRequest) returns (ItemsResponse);
+  // 积分兑换（扣积分 + 扣库存 + 建单）
+  rpc Redeem(RedeemRequest) returns (RedeemResponse);
+  // 兑换订单列表
+  rpc Orders(OrdersRequest) returns (OrdersResponse);
+  // 订单详情（校验归属）
+  rpc OrderDetail(OrderDetailRequest) returns (OrderInfo);
+  // 进行中的抢购活动列表
+  rpc FlashActivities(FlashActivitiesRequest) returns (FlashActivitiesResponse);
+  // 定时抢购（限量内入库，超出直接拒绝）
+  rpc FlashRedeem(FlashRedeemRequest) returns (RedeemResponse);
+}
+
+message ItemInfo {
+  int64 id = 1;
+  string name = 2;
+  string description = 3;
+  int64 price_points = 4;
+  int32 stock = 5;
+  string image_url = 6;
+  string category = 7;
+  bool is_active = 8;
+  string sales_status = 9; // offline / on_sale / sold_out（派生展示）
+}
+
+message ItemsRequest {
+  int64 cursor = 1;  // 上一页最后一条 ID；0 = 第一页
+  int32 limit = 2;   // 默认 20
+  string category = 3;
+}
+
+message ItemsResponse {
+  repeated ItemInfo items = 1;
+  int64 next_cursor = 2;
+  bool has_more = 3;
+}
+
+message RedeemRequest {
+  string user_id = 1;
+  int64 item_id = 2;
+  int32 quantity = 3; // 默认 1
+}
+
+message OrderInfo {
+  int64 id = 1;
+  string user_id = 2;
+  int64 item_id = 3;
+  string item_name = 4;
+  int64 points_spent = 5;
+  string order_status = 6; // pending / completed / cancelled
+  int64 activity_id = 7;   // 0 = 普通兑换
+  int64 created_at = 8;
+}
+
+message RedeemResponse {
+  OrderInfo order = 1;
+}
+
+message OrdersRequest {
+  string user_id = 1;
+  int64 cursor = 2;
+  int32 limit = 3;
+}
+
+message OrdersResponse {
+  repeated OrderInfo orders = 1;
+  int64 next_cursor = 2;
+  bool has_more = 3;
+}
+
+message OrderDetailRequest {
+  string user_id = 1;
+  int64 order_id = 2;
+}
+
+message FlashActivityInfo {
+  int64 id = 1;
+  int64 item_id = 2;
+  string name = 3;
+  int64 start_time = 4; // unix 秒
+  int64 end_time = 5;   // unix 秒；0 = 不限结束
+  int32 limit_qty = 6;
+  int32 sold_qty = 7;
+  int32 per_user_limit = 8;
+  int64 price_points = 9;
+  string status = 10;       // active / ended / pending
+  string sales_status = 11; // presale / on_sale / sold_out / ended（派生展示）
+}
+
+message FlashActivitiesRequest {
+  int32 limit = 1; // 默认 20
+}
+
+message FlashActivitiesResponse {
+  repeated FlashActivityInfo activities = 1;
+}
+
+message FlashRedeemRequest {
+  string user_id = 1;
+  int64 activity_id = 2;
+}

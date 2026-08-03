@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package task;
+
+option go_package = "./task";
+
+// Task 任务领域服务：任务定义 + 用户进度 + 奖励领取。
+// ReportProgress 供 idle-rpc / shop-rpc 上报进度事件（如挂机满 30 分钟、完成 1 次兑换）。
+service Task {
+  // 任务列表（含当前用户进度）
+  rpc List(ListRequest) returns (ListResponse);
+  // 进度总览
+  rpc Progress(ProgressRequest) returns (ProgressResponse);
+  // 领取任务奖励（内部调用 user-rpc AddPoints 入账）
+  rpc Claim(ClaimRequest) returns (ClaimResponse);
+  // 上报进度增量（跨领域事件驱动）
+  rpc ReportProgress(ReportProgressRequest) returns (Empty);
+}
+
+message Empty {}
+
+message TaskInfo {
+  int64 id = 1;
+  string task_type = 2;      // daily / weekly / achievement
+  string task_key = 3;       // 业务 key，如 daily_idle_30
+  string task_name = 4;
+  int32 target_value = 5;
+  int64 reward_points = 6;
+  bool is_active = 7;
+  int32 current_progress = 8;
+  bool is_completed = 9;
+  bool is_claimed = 10;
+  string period = 11;        // 当前周期（如 2026-01-02 / 2026-W01）
+}
+
+message ListRequest {
+  string user_id = 1;
+}
+
+message ListResponse {
+  repeated TaskInfo tasks = 1;
+}
+
+message ProgressRequest {
+  string user_id = 1;
+}
+
+message ProgressResponse {
+  repeated TaskInfo tasks = 1;
+}
+
+message ClaimRequest {
+  string user_id = 1;
+  int64 task_id = 2;
+}
+
+message ClaimResponse {
+  TaskInfo task = 1;
+  int64 reward_points = 2;
+}
+
+message ReportProgressRequest {
+  string user_id = 1;
+  string task_key = 2; // 命中 task_key 的任务累加
+  int32 delta = 3;     // 增量（默认 1）
+}
