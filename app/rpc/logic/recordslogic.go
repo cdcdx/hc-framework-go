@@ -41,7 +41,7 @@ func (l *RecordsLogic) Records(in *hc.IdleRecordsRequest) (*hc.IdleRecordsRespon
 
 	var recs []model.IdleRecord
 	if err := query.Order("id DESC").Limit(limit + 1).Find(&recs).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	hasMore := len(recs) > limit

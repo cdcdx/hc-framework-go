@@ -32,7 +32,7 @@ func (l *StatusLogic) Status(in *hc.IdleStatusRequest) (*hc.IdleStatusResponse, 
 		Where("user_id = ? AND status = ?", in.UserId, model.IdleStatusActive).
 		Order("id ASC").
 		Find(&recs).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	// 今日已赚积分（IdleDailyPoints 已结算累计）
@@ -43,7 +43,7 @@ func (l *StatusLogic) Status(in *hc.IdleStatusRequest) (*hc.IdleStatusResponse, 
 	if err == nil {
 		todayPoints = dp.Total
 	} else if err != nil && !isRecordNotFound(err) {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	out := make([]*hc.IdleRecord, 0, len(recs))

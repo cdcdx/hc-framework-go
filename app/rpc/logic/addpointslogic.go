@@ -3,8 +3,8 @@ package logic
 import (
 	"context"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
@@ -37,7 +37,7 @@ func (l *AddPointsLogic) AddPoints(in *hc.AddPointsRequest) (*hc.AddPointsRespon
 		return nil, errorx.New(errorx.CodeNotFound, "user not found")
 	}
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	if u.Status != "active" {
 		return nil, errorx.New(errorx.CodeAccountLocked)
@@ -46,14 +46,14 @@ func (l *AddPointsLogic) AddPoints(in *hc.AddPointsRequest) (*hc.AddPointsRespon
 	if err := l.svcCtx.Db.Model(&model.User{}).
 		Where("user_id = ?", in.UserId).
 		UpdateColumn("points_balance", gorm.Expr("points_balance + ?", in.Points)).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	var balance int64
 	if err := l.svcCtx.Db.Model(&model.User{}).
 		Where("user_id = ?", in.UserId).
 		Pluck("points_balance", &balance).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	return &hc.AddPointsResponse{UserId: in.UserId, PointsBalance: balance}, nil
 }

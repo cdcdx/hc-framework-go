@@ -132,4 +132,3 @@ func (l *ignoreNotFoundLogger) Trace(ctx context.Context, begin time.Time, fc fu
 	}
 	l.delegate.Trace(ctx, begin, fc, err)
 }
-

@@ -56,7 +56,7 @@ func (l *FlashRedeemLogic) FlashRedeem(in *hc.FlashRedeemRequest) (*hc.RedeemRes
 			metrics.FlashRedeemTimeout.WithLabelValues("db_slow").Inc()
 			return nil, errorx.New(errorx.CodeFlashSaleTimeout)
 		}
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	now := time.Now()
@@ -79,7 +79,7 @@ func (l *FlashRedeemLogic) FlashRedeem(in *hc.FlashRedeemRequest) (*hc.RedeemRes
 	if err := l.svcCtx.Db.WithContext(ctx).Model(&model.RedeemOrder{}).
 		Where("user_id = ? AND activity_id = ?", in.UserId, act.ID).
 		Count(&cnt).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	if cnt >= int64(perUser) {
 		return nil, errorx.New(errorx.CodeFlashSaleUserLimit)
@@ -125,7 +125,7 @@ func (l *FlashRedeemLogic) FlashRedeem(in *hc.FlashRedeemRequest) (*hc.RedeemRes
 			metrics.FlashRedeemTimeout.WithLabelValues("db_slow").Inc()
 			return nil, errorx.New(errorx.CodeFlashSaleTimeout)
 		}
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	reportRedeemProgress(ctx, l.svcCtx, in.UserId, l.Logger)

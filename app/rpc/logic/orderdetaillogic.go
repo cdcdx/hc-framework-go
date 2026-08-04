@@ -3,8 +3,8 @@ package logic
 import (
 	"context"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
@@ -33,7 +33,7 @@ func (l *OrderDetailLogic) OrderDetail(in *hc.ShopOrderDetailRequest) (*hc.Order
 		return nil, errorx.New(errorx.CodeNotFound, "order not found")
 	}
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	// 订单归属校验

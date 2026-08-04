@@ -79,10 +79,10 @@ type DBVendorConfig struct {
 
 // MongoDBConfig MongoDB 连接配置。
 type MongoDBConfig struct {
-	Dsn          string `json:",optional"`
-	MinPoolSize  int    `json:",optional,default=10"`
-	MaxPoolSize  int    `json:",optional,default=100"`
-	MaxIdleTime  time.Duration
+	Dsn         string        `json:",optional"`
+	MinPoolSize int           `json:",optional,default=10"`
+	MaxPoolSize int           `json:",optional,default=100"`
+	MaxIdleTime time.Duration `json:",optional"`
 }
 
 // ClickhouseConfig ClickHouse 连接配置。
@@ -101,43 +101,73 @@ type ESConfig struct {
 }
 
 // ResolveDSN 解析最终的 DSN 和 Driver。
-// 优先级: vendor 段 > 顶层 Dsn。
+// 优先级: 与 driver 匹配的 vendor 段 > 顶层 Dsn。
 // Driver 为空时，从 vendor 段推断。
 func (c *DBConfig) ResolveDSN() (driver, dsn string, err error) {
 	driver = c.Driver
 
-	// SQL 类数据库：优先从 vendor 段取 Master
+	// 仅当 driver 与 vendor 段匹配时才使用 vendor 段。
+	// 例如 driver=sqlite 时不会误取 mysql 段的 DSN。
 	switch {
-	case c.Mysql.Master != "":
-		dsn = c.Mysql.Master
-		if driver == "" {
-			driver = "mysql"
-		}
-	case c.Postgres.Master != "":
-		dsn = c.Postgres.Master
-		if driver == "" {
-			driver = "postgres"
-		}
-	case c.Mongodb.Dsn != "":
-		dsn = c.Mongodb.Dsn
-		if driver == "" {
-			driver = "mongodb"
-		}
-	case c.Clickhouse.Dsn != "":
-		dsn = c.Clickhouse.Dsn
-		if driver == "" {
-			driver = "clickhouse"
-		}
-	case c.Elasticsearch.Addresses != nil && len(c.Elasticsearch.Addresses) > 0:
-		// elasticsearch 不走 DSN，走 Addresses 列表
-		dsn = c.Elasticsearch.Addresses[0]
-		if driver == "" {
-			driver = "elasticsearch"
-		}
-	case c.Dsn != "":
+	case driver == "sqlite":
 		dsn = c.Dsn
+	case driver == "mysql":
+		dsn = c.Mysql.Master
+		if dsn == "" {
+			dsn = c.Dsn
+		}
+	case driver == "postgres" || driver == "postgresql":
+		dsn = c.Postgres.Master
+		if dsn == "" {
+			dsn = c.Dsn
+		}
+	case driver == "mongodb":
+		dsn = c.Mongodb.Dsn
+		if dsn == "" {
+			dsn = c.Dsn
+		}
+	case driver == "clickhouse":
+		dsn = c.Clickhouse.Dsn
+		if dsn == "" {
+			dsn = c.Dsn
+		}
+	case driver == "elasticsearch":
+		if c.Elasticsearch.Addresses != nil && len(c.Elasticsearch.Addresses) > 0 {
+			dsn = c.Elasticsearch.Addresses[0]
+		} else {
+			dsn = c.Dsn
+		}
+	case driver == "":
+		// Driver 为空时自动推断（保留原行为）
+		switch {
+		case c.Mysql.Master != "":
+			driver = "mysql"
+			dsn = c.Mysql.Master
+		case c.Postgres.Master != "":
+			driver = "postgres"
+			dsn = c.Postgres.Master
+		case c.Mongodb.Dsn != "":
+			driver = "mongodb"
+			dsn = c.Mongodb.Dsn
+		case c.Clickhouse.Dsn != "":
+			driver = "clickhouse"
+			dsn = c.Clickhouse.Dsn
+		case c.Elasticsearch.Addresses != nil && len(c.Elasticsearch.Addresses) > 0:
+			driver = "elasticsearch"
+			dsn = c.Elasticsearch.Addresses[0]
+		case c.Dsn != "":
+			driver = "sqlite"
+			dsn = c.Dsn
+		default:
+			return "", "", fmt.Errorf("no DSN provided and driver is empty")
+		}
 	default:
-		return "", "", fmt.Errorf("no DSN provided for driver=%q (set Dsn or vendor segment)", driver)
+		// 未知 driver：兜底取顶层 Dsn
+		dsn = c.Dsn
+	}
+
+	if dsn == "" {
+		return "", "", fmt.Errorf("no DSN resolved for driver=%q", driver)
 	}
 
 	if driver == "" {
@@ -163,8 +193,8 @@ type Databases map[string]DBConfig
 
 // Config 单一领域后端配置（合并 user/idle/task/shop 四个域）。
 type Config struct {
-	Name string
-	Log  logx.LogConf
+	Name      string
+	Log       logx.LogConf
 	Telemetry struct {
 		Name string
 	}
@@ -174,12 +204,12 @@ type Config struct {
 
 	// DB 旧版单库配置（向后兼容）。若 Databases 不为空，DB 被忽略。
 	DB struct {
-		Driver string
-		Dsn    string
+		Driver          string
+		Dsn             string
 		MaxOpenConns    int
 		MaxIdleConns    int
 		ConnMaxLifetime time.Duration
-		PoolLabel string
+		PoolLabel       string
 	} `json:",optional"`
 
 	// ---- 缓存 ----
@@ -222,17 +252,17 @@ type Config struct {
 
 // CacheConfig 缓存配置。
 type CacheConfig struct {
-	Enabled bool           `json:",default=true"`
-	L1      L1CacheConfig  `json:",optional"`
-	L2      L2CacheConfig  `json:",optional"`
+	Enabled bool          `json:",default=true"`
+	L1      L1CacheConfig `json:",optional"`
+	L2      L2CacheConfig `json:",optional"`
 }
 
 type L1CacheConfig struct {
-	Enabled       bool          `json:",default=true"`
-	MaxMemoryMB   int           `json:",default=256"`
-	DefaultTTL    time.Duration `json:",default=5m"`
-	NumCounters   int64         `json:",default=10000000"`
-	MaxCost       int64         `json:",default=268435456"`
+	Enabled     bool          `json:",default=true"`
+	MaxMemoryMB int           `json:",default=256"`
+	DefaultTTL  time.Duration `json:",default=5m"`
+	NumCounters int64         `json:",default=10000000"`
+	MaxCost     int64         `json:",default=268435456"`
 }
 
 type L2CacheConfig struct {

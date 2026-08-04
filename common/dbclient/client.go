@@ -120,28 +120,22 @@ func (f *Factory) NoSQL(name string) (NoSQLClient, error) {
 		return nil, fmt.Errorf("db %s is a SQL database (driver=%s), use SQL() instead", name, cfg.Driver)
 	}
 
-	driver, _, err := cfg.ResolveDSN()
-	if err != nil {
-		return nil, fmt.Errorf("resolve db %s: %w", name, err)
-	}
+	driver, _, _ := cfg.ResolveDSN()
 
-	var client NoSQLClient
+	// NoSQL 适配器尚未实现，统一返回未实现错误。
+	// 各分支预留接入点：mongodb/clickhouse/elasticsearch。
+	var err error
 	switch driver {
 	case "mongodb":
-		// client = newMongoClient(cfg.Mongodb)
-		return nil, fmt.Errorf("mongodb adapter not yet implemented")
+		err = fmt.Errorf("mongodb adapter not yet implemented")
 	case "clickhouse":
-		// client = newClickhouseClient(cfg.Clickhouse)
-		return nil, fmt.Errorf("clickhouse adapter not yet implemented")
+		err = fmt.Errorf("clickhouse adapter not yet implemented")
 	case "elasticsearch":
-		// client = newESClient(cfg.Elasticsearch)
-		return nil, fmt.Errorf("elasticsearch adapter not yet implemented")
+		err = fmt.Errorf("elasticsearch adapter not yet implemented")
 	default:
-		return nil, fmt.Errorf("unsupported NoSQL driver: %s", driver)
+		err = fmt.Errorf("unsupported NoSQL driver: %s", driver)
 	}
-
-	f.noSQLClients[name] = client
-	return client, nil
+	return nil, err
 }
 
 // MongoDB 获取 MongoDB 客户端（快捷方法）。

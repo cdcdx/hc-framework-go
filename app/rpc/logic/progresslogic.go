@@ -3,8 +3,8 @@ package logic
 import (
 	"context"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/zeromicro/go-zero/core/logx"
 )
@@ -27,7 +27,7 @@ func NewProgressLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Progress
 func (l *ProgressLogic) Progress(in *hc.TaskProgressRequest) (*hc.TaskProgressResponse, error) {
 	tasks, err := loadTaskInfos(l.svcCtx.Db, in.UserId)
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	return &hc.TaskProgressResponse{Tasks: tasks}, nil
 }

@@ -38,18 +38,18 @@ type Config struct {
 
 // L1Config 本地缓存配置
 type L1Config struct {
-	Enabled       bool
-	MaxMemoryMB   int
-	DefaultTTL    time.Duration
-	NumCounters   int64
-	MaxCost       int64
-	BufferItems   int64
+	Enabled     bool
+	MaxMemoryMB int
+	DefaultTTL  time.Duration
+	NumCounters int64
+	MaxCost     int64
+	BufferItems int64
 }
 
 // L2Config 分布式缓存配置
 type L2Config struct {
 	Enabled   bool
-	Type      string   // redis / none
+	Type      string // redis / none
 	Addresses []string
 	Password  string
 	DB        int

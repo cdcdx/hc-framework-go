@@ -41,7 +41,7 @@ func (l *StartLogic) Start(in *hc.IdleStartRequest) (*hc.IdleRecord, error) {
 		return toIdleRecord(&existing), nil
 	}
 	if err != gorm.ErrRecordNotFound {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	// 活跃设备数上限
@@ -49,7 +49,7 @@ func (l *StartLogic) Start(in *hc.IdleStartRequest) (*hc.IdleRecord, error) {
 	if err := l.svcCtx.Db.Model(&model.IdleRecord{}).
 		Where("user_id = ? AND status = ?", in.UserId, model.IdleStatusActive).
 		Count(&count).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	if count >= int64(l.svcCtx.Config.Idle.MaxActiveDevices) {
 		return nil, errorx.New(errorx.CodeUnknownError, "maximum active devices reached")
@@ -64,7 +64,7 @@ func (l *StartLogic) Start(in *hc.IdleStartRequest) (*hc.IdleRecord, error) {
 		Status:          model.IdleStatusActive,
 	}
 	if err := l.svcCtx.Db.Create(rec).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	return toIdleRecord(rec), nil
 }

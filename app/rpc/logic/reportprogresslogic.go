@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
@@ -38,7 +38,7 @@ func (l *ReportProgressLogic) ReportProgress(in *hc.ReportProgressRequest) (*hc.
 		return nil, errorx.New(errorx.CodeNotFound, "task not found")
 	}
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	var pro model.UserTaskProgress
@@ -51,7 +51,7 @@ func (l *ReportProgressLogic) ReportProgress(in *hc.ReportProgressRequest) (*hc.
 			Period: period,
 		}
 	} else if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	// 已完成且已领取的，不再累加
@@ -66,7 +66,7 @@ func (l *ReportProgressLogic) ReportProgress(in *hc.ReportProgressRequest) (*hc.
 	}
 
 	if err := l.svcCtx.Db.Save(&pro).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	return &hc.Empty{}, nil

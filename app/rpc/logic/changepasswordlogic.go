@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/bcrypt"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/model"
@@ -42,7 +42,7 @@ func (l *ChangePasswordLogic) ChangePassword(in *hc.ChangePasswordRequest) (*hc.
 		return nil, errorx.New(errorx.CodeNotFound, "user not found")
 	}
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	if bcrypt.Compare(u.PasswordHash, in.OldPassword) != nil {
@@ -51,7 +51,7 @@ func (l *ChangePasswordLogic) ChangePassword(in *hc.ChangePasswordRequest) (*hc.
 
 	hash, err := bcrypt.Hash(in.NewPassword, 0)
 	if err != nil {
-		return nil, errorx.New(errorx.CodeUnknownError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeUnknownError, err)
 	}
 
 	now := time.Now()
@@ -59,7 +59,7 @@ func (l *ChangePasswordLogic) ChangePassword(in *hc.ChangePasswordRequest) (*hc.
 		"password_hash":       hash,
 		"password_changed_at": now,
 	}).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	return &hc.ChangePasswordResponse{}, nil

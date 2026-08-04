@@ -40,7 +40,7 @@ func (l *HeartbeatLogic) Heartbeat(in *hc.IdleHeartbeatRequest) (*hc.Empty, erro
 		return nil, errorx.New(errorx.CodeNotIdle)
 	}
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	now := time.Now()
@@ -53,7 +53,7 @@ func (l *HeartbeatLogic) Heartbeat(in *hc.IdleHeartbeatRequest) (*hc.Empty, erro
 	}
 
 	if err := l.svcCtx.Db.Model(&rec).UpdateColumn("last_heartbeat_at", now).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	return &hc.Empty{}, nil
 }

@@ -44,5 +44,5 @@ func (b *ristrettoBloom) MightContain(key string) bool {
 // ---- nilBloom: 缓存禁用时的 no-op 实现 ----
 type nilBloom struct{}
 
-func (n *nilBloom) Add(key string)            {}
+func (n *nilBloom) Add(key string)               {}
 func (n *nilBloom) MightContain(key string) bool { return true } // 无布隆时不过滤

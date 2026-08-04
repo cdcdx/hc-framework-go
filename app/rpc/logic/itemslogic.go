@@ -2,15 +2,21 @@ package logic
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
-// ItemsLogic 商品列表（游标分页 + 分类筛选）
+// ItemsLogic 商品列表（游标分页 + 分类筛选 + 两级缓存）。
+//
+// 缓存策略:
+//   - 默认分类（空 category）首页（无 cursor）走缓存，TTL 30s
+//   - 带分类/游标的请求直接查 DB（分类组合太多，缓存命中率低）
 type ItemsLogic struct {
 	ctx    context.Context
 	svcCtx *svc.ServiceContext
@@ -34,17 +40,43 @@ func (l *ItemsLogic) Items(in *hc.ShopItemsRequest) (*hc.ShopItemsResponse, erro
 		limit = 100
 	}
 
-	query := l.svcCtx.Db.Model(&model.ShopItem{}).Where("is_active = ?", true)
-	if in.Category != "" {
-		query = query.Where("category = ?", in.Category)
+	// 热点路径：默认分类首页走缓存
+	if in.Category == "" && in.Cursor == 0 {
+		cacheKey := fmt.Sprintf("shop:items:default:%d", limit)
+		if cached, err := l.svcCtx.CachedGet(l.ctx, cacheKey, func(ctx context.Context) ([]byte, error) {
+			return l.loadItemsAndMarshal(limit, "", 0)
+		}); err == nil && cached != nil {
+			var resp hc.ShopItemsResponse
+			if err := json.Unmarshal(cached, &resp); err == nil {
+				return &resp, nil
+			}
+		}
 	}
-	if in.Cursor > 0 {
-		query = query.Where("id < ?", in.Cursor)
+
+	// 非热点路径：直接查 DB
+	return l.loadItems(limit, in.Category, in.Cursor)
+}
+
+func (l *ItemsLogic) loadItemsAndMarshal(limit int, category string, cursor int64) ([]byte, error) {
+	resp, err := l.loadItems(limit, category, cursor)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(resp)
+}
+
+func (l *ItemsLogic) loadItems(limit int, category string, cursor int64) (*hc.ShopItemsResponse, error) {
+	query := l.svcCtx.Db.Model(&model.ShopItem{}).Where("is_active = ?", true)
+	if category != "" {
+		query = query.Where("category = ?", category)
+	}
+	if cursor > 0 {
+		query = query.Where("id < ?", cursor)
 	}
 
 	var items []model.ShopItem
 	if err := query.Order("id DESC").Limit(limit + 1).Find(&items).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	hasMore := len(items) > limit
@@ -63,4 +95,14 @@ func (l *ItemsLogic) Items(in *hc.ShopItemsRequest) (*hc.ShopItemsResponse, erro
 		NextCursor: nextCursor,
 		HasMore:    hasMore,
 	}, nil
+}
+
+// InvalidateItemsCache 商品变更时清除默认首页缓存（在 redeem/create/update 等写操作后调用）。
+func InvalidateItemsCache(svcCtx *svc.ServiceContext) {
+	if svcCtx.Cache == nil {
+		return
+	}
+	for _, limit := range []int{10, 20} {
+		_ = svcCtx.Cache.Delete(context.Background(), fmt.Sprintf("shop:items:default:%d", limit))
+	}
 }

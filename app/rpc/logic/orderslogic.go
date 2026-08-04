@@ -3,8 +3,8 @@ package logic
 import (
 	"context"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
@@ -41,7 +41,7 @@ func (l *OrdersLogic) Orders(in *hc.ShopOrdersRequest) (*hc.ShopOrdersResponse, 
 
 	var orders []model.RedeemOrder
 	if err := query.Order("id DESC").Limit(limit + 1).Find(&orders).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	hasMore := len(orders) > limit

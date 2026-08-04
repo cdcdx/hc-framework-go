@@ -40,7 +40,7 @@ func (l *StopDeviceLogic) StopDevice(in *hc.IdleStopDeviceRequest) (*hc.IdleReco
 		return nil, errorx.New(errorx.CodeNotIdle)
 	}
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	if _, err := settle(l.ctx, l.svcCtx, &rec, time.Now(), model.IdleStatusCompleted); err != nil {

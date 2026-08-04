@@ -40,7 +40,7 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 		return nil, errorx.New(errorx.CodeItemOffline)
 	}
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	cost := item.PricePoints * int64(qty)
 
@@ -80,7 +80,7 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 		ActivityID:  0,
 	}
 	if err := l.svcCtx.Db.Create(order).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	// 兑换进度上报（进程内 task 域，失败不阻塞主流程）

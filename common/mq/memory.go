@@ -20,9 +20,9 @@ type memoryConsumer struct {
 
 // memoryBroker 进程内消息代理（单例，同进程共享）
 type memoryBroker struct {
-	mu       sync.RWMutex
-	topics   map[string][]chan *Message
-	bufSize  int
+	mu      sync.RWMutex
+	topics  map[string][]chan *Message
+	bufSize int
 }
 
 var (

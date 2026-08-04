@@ -1,8 +1,8 @@
 package svc
 
 import (
-	hcclient "github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/config"
+	hcclient "github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/common/captcha"
 	"github.com/cdcdx/hc-framework-go/common/jwt"
 	"github.com/zeromicro/go-zero/core/logx"

@@ -7,9 +7,9 @@ import (
 	"net/http"
 
 	"github.com/cdcdx/hc-framework-go/app/gateway/api/svc"
-	"github.com/zeromicro/go-zero/core/logx"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/response"
+	"github.com/zeromicro/go-zero/core/logx"
 )
 
 // CaptchaMiddleware 验证码防水墙：配置启用时，注册/登录请求必须携带 captcha_token 且通过校验。

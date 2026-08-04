@@ -73,10 +73,10 @@ func (s *ristrettoStore) Close() error {
 // ---- nilStore: 缓存禁用时的 no-op 实现 ----
 type nilStore struct{}
 
-func (n *nilStore) Get(ctx context.Context, key string) ([]byte, error)    { return nil, nil }
+func (n *nilStore) Get(ctx context.Context, key string) ([]byte, error) { return nil, nil }
 func (n *nilStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	return nil
 }
-func (n *nilStore) Delete(ctx context.Context, key string) error { return nil }
+func (n *nilStore) Delete(ctx context.Context, key string) error         { return nil }
 func (n *nilStore) Exists(ctx context.Context, key string) (bool, error) { return false, nil }
-func (n *nilStore) Close() error                                  { return nil }
+func (n *nilStore) Close() error                                         { return nil }

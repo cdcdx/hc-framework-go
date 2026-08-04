@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
@@ -47,7 +47,7 @@ func (l *RefreshTokenLogic) RefreshToken(in *hc.RefreshTokenRequest) (*hc.Refres
 		return nil, errorx.New(errorx.CodeTokenInvalid)
 	}
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	if u.Status != "active" {
 		return nil, errorx.New(errorx.CodeAccountLocked)
@@ -55,7 +55,7 @@ func (l *RefreshTokenLogic) RefreshToken(in *hc.RefreshTokenRequest) (*hc.Refres
 
 	access, refresh, err := l.svcCtx.JwtMgr.GenerateTokenPair(u.UserID, u.Email)
 	if err != nil {
-		return nil, errorx.New(errorx.CodeUnknownError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeUnknownError, err)
 	}
 
 	return &hc.RefreshTokenResponse{

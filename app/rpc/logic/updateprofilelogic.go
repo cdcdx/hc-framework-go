@@ -3,8 +3,8 @@ package logic
 import (
 	"context"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
@@ -33,7 +33,7 @@ func (l *UpdateProfileLogic) UpdateProfile(in *hc.UpdateProfileRequest) (*hc.Upd
 		return nil, errorx.New(errorx.CodeNotFound, "user not found")
 	}
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	updates := map[string]any{}
@@ -54,11 +54,11 @@ func (l *UpdateProfileLogic) UpdateProfile(in *hc.UpdateProfileRequest) (*hc.Upd
 	}
 
 	if err := l.svcCtx.Db.Model(&u).Updates(updates).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	if err := l.svcCtx.Db.Where("user_id = ?", u.UserID).First(&u).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	return &hc.UpdateProfileResponse{User: toUserInfo(&u)}, nil
 }

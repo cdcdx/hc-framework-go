@@ -3,8 +3,8 @@ package logic
 import (
 	"context"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/bcrypt"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/model"
@@ -39,7 +39,7 @@ func (l *RegisterLogic) Register(in *hc.RegisterRequest) (*hc.RegisterResponse, 
 	// 邮箱唯一校验（并发下由 users.email 唯一索引兜底）
 	var count int64
 	if err := l.svcCtx.Db.Model(&model.User{}).Where("email = ?", in.Email).Count(&count).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	if count > 0 {
 		return nil, errorx.New(errorx.CodeEmailRegistered)
@@ -47,7 +47,7 @@ func (l *RegisterLogic) Register(in *hc.RegisterRequest) (*hc.RegisterResponse, 
 
 	hash, err := bcrypt.Hash(in.Password, l.svcCtx.Config.BcryptCost)
 	if err != nil {
-		return nil, errorx.New(errorx.CodeUnknownError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeUnknownError, err)
 	}
 
 	username := in.Username
@@ -63,13 +63,13 @@ func (l *RegisterLogic) Register(in *hc.RegisterRequest) (*hc.RegisterResponse, 
 		Status:       "active",
 	}
 	if err := l.svcCtx.Db.Create(u).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	// 注册成功直接签发 token（与 gin 版一致，避免二次登录）
 	access, refresh, err := l.svcCtx.JwtMgr.GenerateTokenPair(u.UserID, u.Email)
 	if err != nil {
-		return nil, errorx.New(errorx.CodeUnknownError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeUnknownError, err)
 	}
 
 	return &hc.RegisterResponse{

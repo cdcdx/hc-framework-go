@@ -32,7 +32,7 @@ func (l *StopLogic) Stop(in *hc.IdleStopRequest) (*hc.IdleRecord, error) {
 		Where("user_id = ? AND status = ?", in.UserId, model.IdleStatusActive).
 		Order("id ASC").
 		Find(&recs).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	if len(recs) == 0 {
 		return nil, errorx.New(errorx.CodeNotIdle)

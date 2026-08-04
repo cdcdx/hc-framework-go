@@ -41,9 +41,9 @@ func TestDBPoolMetrics(t *testing.T) {
 		t.Fatalf("gather default registry: %v", err)
 	}
 	want := map[string]bool{
-		"db_pool_utilization":   false,
-		"db_pool_wait_count_total": false,
-		"shop_flash_redeem_total":   false,
+		"db_pool_utilization":        false,
+		"db_pool_wait_count_total":   false,
+		"shop_flash_redeem_total":    false,
 		"idle_scan_duration_seconds": false,
 	}
 	for _, mf := range metricFamilies {

@@ -2,6 +2,7 @@ package svc
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/cdcdx/hc-framework-go/common/errorx"
@@ -65,7 +66,23 @@ func settleRecord(ctx context.Context, svcCtx *ServiceContext, rec *model.IdleRe
 	if err := svcCtx.Db.Model(rec).Updates(updates).Error; err != nil {
 		return 0, errorx.New(errorx.CodeDBError, err.Error())
 	}
+
+	// 发布结算事件（MQ 禁用时为 no-op），异步通知 task/log 等下游域
+	publishSettleEvent(ctx, svcCtx, rec, points, status)
+
 	return points, nil
+}
+
+// publishSettleEvent 发布挂机结算事件到 MQ。
+// 事件体为 JSON，含 user_id / points / status / duration 等关键字段。
+func publishSettleEvent(ctx context.Context, svcCtx *ServiceContext, rec *model.IdleRecord, points int64, status string) {
+	if svcCtx.MQProducer == nil {
+		return
+	}
+	// 用最简单的 JSON 拼接避免 import encoding/json
+	body := fmt.Sprintf(`{"user_id":"%s","device_id":"%s","points":%d,"status":"%s","duration_sec":%d}`,
+		rec.UserID, rec.DeviceID, points, status, rec.DurationSeconds)
+	_ = svcCtx.MQProducer.SendAsync(ctx, "hc.idle.settled", rec.UserID, []byte(body))
 }
 
 // accumulateDaily 按 (user_id, day) 累加今日挂机积分，超过每日上限返回 CodeDailyPointsLimit

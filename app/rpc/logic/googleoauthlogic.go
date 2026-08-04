@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/google/uuid"
@@ -71,7 +71,7 @@ func (l *GoogleOAuthLogic) GoogleOAuth(in *hc.GoogleOAuthRequest) (*hc.GoogleOAu
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	resp, err := httpClient.PostForm("https://oauth2.googleapis.com/token", form)
 	if err != nil {
-		return nil, errorx.New(errorx.CodeThirdPartyError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeThirdPartyError, err)
 	}
 	defer resp.Body.Close()
 	tokenBody, _ := io.ReadAll(resp.Body)
@@ -86,7 +86,7 @@ func (l *GoogleOAuthLogic) GoogleOAuth(in *hc.GoogleOAuthRequest) (*hc.GoogleOAu
 	req.Header.Set("Authorization", "Bearer "+tr.AccessToken)
 	infoResp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, errorx.New(errorx.CodeThirdPartyError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeThirdPartyError, err)
 	}
 	defer infoResp.Body.Close()
 	infoBody, _ := io.ReadAll(infoResp.Body)
@@ -103,7 +103,7 @@ func (l *GoogleOAuthLogic) GoogleOAuth(in *hc.GoogleOAuthRequest) (*hc.GoogleOAu
 
 	access, refresh, err := l.svcCtx.JwtMgr.GenerateTokenPair(u.UserID, u.Email)
 	if err != nil {
-		return nil, errorx.New(errorx.CodeUnknownError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeUnknownError, err)
 	}
 
 	return &hc.GoogleOAuthResponse{
@@ -123,7 +123,7 @@ func (l *GoogleOAuthLogic) findOrCreate(info googleUserInfo) (*model.User, error
 		return &u, nil
 	}
 	if err != gorm.ErrRecordNotFound {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	// 兜底：同 email 已注册（非 Google 方式）→ 绑定 google_id
@@ -133,12 +133,12 @@ func (l *GoogleOAuthLogic) findOrCreate(info googleUserInfo) (*model.User, error
 			return nil, errorx.New(errorx.CodeAccountLocked)
 		}
 		if err := l.svcCtx.Db.Model(&u).UpdateColumn("google_id", info.ID).Error; err != nil {
-			return nil, errorx.New(errorx.CodeDBError, err.Error())
+			return nil, errorx.NewErr(errorx.CodeDBError, err)
 		}
 		return &u, nil
 	}
 	if err != gorm.ErrRecordNotFound {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	// 全新用户自动注册
@@ -147,12 +147,12 @@ func (l *GoogleOAuthLogic) findOrCreate(info googleUserInfo) (*model.User, error
 		name = info.Email
 	}
 	nu := &model.User{
-		UserID:   uuid.NewString(),
-		Username: name,
-		Email:    info.Email,
-		GoogleID: &info.ID,
+		UserID:    uuid.NewString(),
+		Username:  name,
+		Email:     info.Email,
+		GoogleID:  &info.ID,
 		AvatarURL: info.Picture,
-		Status:   "active",
+		Status:    "active",
 	}
 	if err := l.svcCtx.Db.Create(nu).Error; err != nil {
 		return nil, fmt.Errorf("create user: %w", err)

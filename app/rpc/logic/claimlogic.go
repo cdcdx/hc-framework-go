@@ -34,7 +34,7 @@ func (l *ClaimLogic) Claim(in *hc.TaskClaimRequest) (*hc.TaskClaimResponse, erro
 		return nil, errorx.New(errorx.CodeNotFound, "task not found")
 	}
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	period := periodOf(&t, time.Now())
@@ -46,7 +46,7 @@ func (l *ClaimLogic) Claim(in *hc.TaskClaimRequest) (*hc.TaskClaimResponse, erro
 		return nil, errorx.New(errorx.CodeTaskNotCompleted)
 	}
 	if err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	if p.IsClaimed {
 		return nil, errorx.New(errorx.CodeTaskClaimed)
@@ -62,7 +62,7 @@ func (l *ClaimLogic) Claim(in *hc.TaskClaimRequest) (*hc.TaskClaimResponse, erro
 	}
 
 	if err := l.svcCtx.Db.Model(&p).UpdateColumn("is_claimed", true).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	return &hc.TaskClaimResponse{

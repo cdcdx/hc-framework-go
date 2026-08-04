@@ -4,8 +4,10 @@
 package errorx
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/zeromicro/go-zero/core/logx"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -30,26 +32,26 @@ const (
 
 // 认证授权 10100-10199
 const (
-	_                  = iota + 10100 // 10100 占位
-	CodeTokenExpired                  // 10101
-	CodeTokenInvalid                  // 10102
-	CodePermissionDenied              // 10103
-	CodeTokenBlacklisted              // 10104
+	_                    = iota + 10100 // 10100 占位
+	CodeTokenExpired                    // 10101
+	CodeTokenInvalid                    // 10102
+	CodePermissionDenied                // 10103
+	CodeTokenBlacklisted                // 10104
 )
 
 // 用户相关 10200-10299
 const (
 	_                   = iota + 10200 // 10200 占位
-	CodeEmailRegistered                 // 10201
-	CodePasswordWrong                   // 10202
-	CodeAccountLocked                   // 10203
-	CodeAccountDisabled                 // 10204
-	CodeCaptchaRequired                 // 10205
+	CodeEmailRegistered                // 10201
+	CodePasswordWrong                  // 10202
+	CodeAccountLocked                  // 10203
+	CodeAccountDisabled                // 10204
+	CodeCaptchaRequired                // 10205
 )
 
 // 积分/兑换 10300-10399
 const (
-	_                      = iota + 10300 // 10300 占位
+	_                       = iota + 10300 // 10300 占位
 	CodePointsInsufficient                 // 10301
 	CodeStockInsufficient                  // 10302
 	CodeItemOffline                        // 10303
@@ -65,26 +67,26 @@ const (
 
 // 挂机相关 10400-10499
 const (
-	_                = iota + 10400 // 10400 占位
-	CodeAlreadyIdle                  // 10401
-	CodeNotIdle                      // 10402
-	CodeKickedOffline                // 10403
-	CodeHeartbeatTimeout             // 10404
-	CodeDailyPointsLimit             // 10405
+	_                    = iota + 10400 // 10400 占位
+	CodeAlreadyIdle                     // 10401
+	CodeNotIdle                         // 10402
+	CodeKickedOffline                   // 10403
+	CodeHeartbeatTimeout                // 10404
+	CodeDailyPointsLimit                // 10405
 )
 
 // 任务相关 10500-10599
 const (
-	_                      = iota + 10500 // 10500 占位
-	CodeTaskNotCompleted                   // 10501
-	CodeTaskClaimed                        // 10502
-	CodeTaskExpired                        // 10503
-	CodeProgressInsufficient               // 10504
+	_                        = iota + 10500 // 10500 占位
+	CodeTaskNotCompleted                    // 10501
+	CodeTaskClaimed                         // 10502
+	CodeTaskExpired                         // 10503
+	CodeProgressInsufficient                // 10504
 )
 
 // 限流/熔断 10600-10699
 const (
-	_                = iota + 10600 // 10600 占位
+	_                 = iota + 10600 // 10600 占位
 	CodeRateLimited                  // 10601
 	CodeCircuitOpen                  // 10602
 	CodeCaptchaVerify                // 10603
@@ -92,7 +94,7 @@ const (
 
 // 系统内部错误 10700-10799
 const (
-	_                  = iota + 10700 // 10700 占位
+	_                   = iota + 10700 // 10700 占位
 	CodeDBError                        // 10701
 	CodeRedisError                     // 10702
 	CodeKafkaError                     // 10703
@@ -169,6 +171,17 @@ func New(code int, msg ...string) error {
 // Newf 同 New，支持格式化消息。
 func Newf(code int, format string, args ...any) error {
 	return status.Error(codes.Code(code), fmt.Sprintf(format, args...))
+}
+
+// NewErr 创建业务错误并记录底层 cause 到日志。
+// 与 New(code, err.Error()) 不同，本函数不会把内部错误细节（SQL 语句、
+// 表名、第三方堆栈等）透传给客户端，仅返回该错误码对应的标准消息，
+// 详细错误经 logx 留存便于排查。适用于包裹数据库/第三方调用错误。
+func NewErr(code int, cause error) error {
+	if cause != nil {
+		logx.WithContext(context.Background()).Errorf("errorx: code=%d msg=%q cause=%v", code, Message(code), cause)
+	}
+	return status.Error(codes.Code(code), Message(code))
 }
 
 // Code 从 error（含跨 rpc 传来的 error）解析业务错误码；

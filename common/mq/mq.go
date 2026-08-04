@@ -102,5 +102,7 @@ func (n *noopProducer) Close() error { return nil }
 
 type noopConsumer struct{}
 
-func (n *noopConsumer) Subscribe(ctx context.Context, topic string, handler Handler) error { return nil }
-func (n *noopConsumer) Close() error                                                        { return nil }
+func (n *noopConsumer) Subscribe(ctx context.Context, topic string, handler Handler) error {
+	return nil
+}
+func (n *noopConsumer) Close() error { return nil }

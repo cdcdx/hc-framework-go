@@ -3,8 +3,8 @@ package logic
 import (
 	"context"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
+	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
@@ -42,7 +42,7 @@ func (l *DeductPointsLogic) DeductPoints(in *hc.DeductPointsRequest) (*hc.Deduct
 		// 区分「用户不存在」与「余额不足」
 		var count int64
 		if err := l.svcCtx.Db.Model(&model.User{}).Where("user_id = ?", in.UserId).Count(&count).Error; err != nil {
-			return nil, errorx.New(errorx.CodeDBError, err.Error())
+			return nil, errorx.NewErr(errorx.CodeDBError, err)
 		}
 		if count == 0 {
 			return nil, errorx.New(errorx.CodeNotFound, "user not found")
@@ -54,7 +54,7 @@ func (l *DeductPointsLogic) DeductPoints(in *hc.DeductPointsRequest) (*hc.Deduct
 	if err := l.svcCtx.Db.Model(&model.User{}).
 		Where("user_id = ?", in.UserId).
 		Pluck("points_balance", &balance).Error; err != nil {
-		return nil, errorx.New(errorx.CodeDBError, err.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	return &hc.DeductPointsResponse{UserId: in.UserId, PointsBalance: balance}, nil
 }

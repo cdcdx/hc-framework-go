@@ -34,9 +34,9 @@ const (
 // UserTaskProgress 用户任务进度表
 type UserTaskProgress struct {
 	ID              int64      `json:"id" gorm:"primaryKey;autoIncrement"`
-	UserID          string     `json:"user_id" gorm:"uniqueIndex:idx_user_task_period;not null;type:varchar(191)"`
-	TaskID          int64      `json:"task_id" gorm:"uniqueIndex:idx_user_task_period;not null"`
-	Period          string     `json:"period" gorm:"uniqueIndex:idx_user_task_period;default:'';type:varchar(50)"`
+	UserID          string     `json:"user_id" gorm:"index:idx_user_task_period;not null;type:varchar(191)"`
+	TaskID          int64      `json:"task_id" gorm:"index:idx_user_task_period;not null"`
+	Period          string     `json:"period" gorm:"index:idx_user_task_period;default:'';type:varchar(50)"`
 	CurrentProgress int        `json:"current_progress" gorm:"default:0"`
 	IsCompleted     bool       `json:"is_completed" gorm:"default:false"`
 	IsClaimed       bool       `json:"is_claimed" gorm:"default:false"`
