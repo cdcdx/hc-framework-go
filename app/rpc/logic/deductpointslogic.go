@@ -36,7 +36,7 @@ func (l *DeductPointsLogic) DeductPoints(in *hc.DeductPointsRequest) (*hc.Deduct
 		Where("user_id = ? AND points_balance >= ?", in.UserId, in.Points).
 		UpdateColumn("points_balance", gorm.Expr("points_balance - ?", in.Points))
 	if result.Error != nil {
-		return nil, errorx.New(errorx.CodeDBError, result.Error.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, result.Error)
 	}
 	if result.RowsAffected == 0 {
 		// 区分「用户不存在」与「余额不足」

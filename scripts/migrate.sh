@@ -65,6 +65,9 @@ db_label() {
 }
 
 # 获取指定数据库的驱动
+# 兼容两种配置结构:
+#   - 旧版: database.<db>.driver
+#   - 合并部署(go-zero): Rpc.Databases.<db>.Driver
 get_driver() {
     local db=$1
     local env_var
@@ -73,7 +76,12 @@ get_driver() {
         echo "${!env_var}"
         return
     fi
-    config_yaml "database.${db}.driver" ""
+    local driver
+    driver=$(config_yaml "Rpc.Databases.${db}.Driver" "")
+    if [ -z "$driver" ]; then
+        driver=$(config_yaml "database.${db}.driver" "")
+    fi
+    echo "$driver"
 }
 
 # 是否 SQL 类驱动
@@ -95,6 +103,9 @@ get_dsn() {
         mysql)
             local env_var="APP_DATABASE_${env_prefix}_MYSQL_MASTER"
             local dsn="${!env_var:-}"
+            if [ -z "$dsn" ]; then
+                dsn=$(config_yaml "Rpc.Databases.${db}.Mysql.Master" "")
+            fi
             if [ -z "$dsn" ]; then
                 dsn=$(config_yaml "database.${db}.mysql.master" \
                     "mysql://root:password@127.0.0.1:3306/hc_${db}?charset=utf8mb4&parseTime=True")
@@ -123,6 +134,9 @@ get_dsn() {
         sqlite|sqlite3)
             local env_var="APP_DATABASE_${env_prefix}_DSN"
             local dsn="${!env_var:-}"
+            if [ -z "$dsn" ]; then
+                dsn=$(config_yaml "Rpc.Databases.${db}.Dsn" "")
+            fi
             if [ -z "$dsn" ]; then
                 dsn=$(config_yaml "database.${db}.dsn" \
                     "file:./data/hc_${db}.db?cache=shared&_journal_mode=WAL")

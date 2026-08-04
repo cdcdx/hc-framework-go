@@ -71,10 +71,14 @@ make help           # 全部命令
 │       ├── logic/                  # 网关逻辑 (薄层)
 │       └── svc/                    # 网关上下文
 ├── common/                         # 公共库
-│   ├── errorx/                     # 业务错误码
+│   ├── errorx/                     # 业务错误码 (含 NewErr 安全透传)
 │   ├── jwt/                        # JWT 签发/校验
 │   ├── captcha/                    # 验证码 (4 厂商)
 │   ├── gormx/                      # GORM 连接工厂 + 池指标
+│   ├── cache/                      # 三级缓存 (L1 本地 + L2 Redis + 布隆)
+│   ├── dbclient/                   # 多数据源 + NoSQL 适配器工厂
+│   ├── mq/                         # 消息队列 (Kafka/RabbitMQ)
+│   ├── bcrypt/                     # 密码哈希
 │   ├── metrics/                    # 业务 Prometheus 指标
 │   ├── model/                      # 数据模型
 │   └── response/                   # 统一响应

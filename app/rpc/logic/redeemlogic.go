@@ -49,7 +49,7 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 		Where("id = ? AND is_active = ? AND stock >= ?", in.ItemId, true, qty).
 		UpdateColumn("stock", gorm.Expr("stock - ?", qty))
 	if result.Error != nil {
-		return nil, errorx.New(errorx.CodeDBError, result.Error.Error())
+		return nil, errorx.NewErr(errorx.CodeDBError, result.Error)
 	}
 	if result.RowsAffected == 0 {
 		return nil, errorx.New(errorx.CodeStockInsufficient)

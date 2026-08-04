@@ -79,6 +79,7 @@ swagger/
 # 本地真实配置副本/备份（含密钥，切勿提交）
 .backup/
 config/server.yaml
+config/server.mysql.yaml
 
 # K8s Secret（生产环境的实际密钥文件）
 deployments/secret-prod.yaml

@@ -157,8 +157,8 @@ func (m *Manager) Exists(ctx context.Context, key string) bool {
 	if !m.bloom.MightContain(key) {
 		return false
 	}
-	_, err := m.Get(ctx, key)
-	return err == nil
+	val, err := m.Get(ctx, key)
+	return err == nil && val != nil
 }
 
 // Close 关闭 L2 连接（L1 是本地缓存，无需关闭）。

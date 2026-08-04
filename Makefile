@@ -11,7 +11,7 @@ BIN := bin
 
 # ---- 所有 target 声明 ----
 .PHONY: all help gen tidy \
-        run build restart \
+        run build restart run-mysql \
         test lint kill clean \
 		migrate migrate-up migrate-down migrate-status \
         mon-up mon-down mon-restart mon-reload mon-status mon-logs mon-clean mon-health \
@@ -90,6 +90,11 @@ MIGRATE := bash scripts/migrate.sh
 migrate migrate-up:
 	@$(MIGRATE) up all
 
+# MySQL 压测配置迁移: 读取 config/server.mysql.yaml 建库 + 表结构。
+# 前置: 已编辑 server.mysql.yaml 的 Mysql.Master 连接串，且 MySQL 实例可连通。
+migrate-mysql:
+	@CONFIG_FILE=config/server.mysql.yaml $(MIGRATE) up all
+
 migrate-down:
 	@$(MIGRATE) down all
 
@@ -103,6 +108,10 @@ migrate-status:
 run:
 	@echo "启动 hc-server (REST :8080, 指标 :8080/metrics)..."
 	@go run ./app/server/cmd -f config/server.yaml
+
+run-mysql:
+	@echo "启动 hc-server (REST :8080, 指标 :8080/metrics)..."
+	@go run ./app/server/cmd -f config/server.mysql.yaml
 
 build:
 	mkdir -p $(BIN)

@@ -5,13 +5,13 @@ COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
 # 网关
-RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/gateway-api ./app/gateway/api/gateway.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/hc-gateway ./app/gateway/api/gateway.go
 
 # 运行阶段
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
-COPY --from=builder /bin/gateway-api /app/gateway-api
+COPY --from=builder /bin/hc-gateway /app/hc-gateway
 COPY app/gateway/api/etc /app/etc
 EXPOSE 8080
-ENTRYPOINT ["/app/gateway-api", "-f", "/app/etc/gateway.yaml"]
+ENTRYPOINT ["/app/hc-gateway", "-f", "/app/etc/gateway.yaml"]

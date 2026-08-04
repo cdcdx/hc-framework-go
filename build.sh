@@ -16,8 +16,8 @@ log_ok()   { echo -e "${GREEN}[OK]${NC}    $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 log_err()  { echo -e "${RED}[ERROR]${NC} $*"; }
 
-# ── 配置（go-zero 版：合并单进程 hc-server，兼容独立双进程 hc-rpc + gateway-api）──
-BINARIES=("hc-server" "hc-rpc" "gateway-api")
+# ── 配置（go-zero 版：合并单进程 hc-server，兼容独立双进程 hc-rpc + hc-gateway）──
+BINARIES=("hc-server" "hc-rpc" "hc-gateway")
 HC_RPC_PORT=8001
 GATEWAY_PORT=8080
 METRICS_PORT=8080
@@ -32,7 +32,7 @@ show_usage() {
 
 Commands:
   init        初始化开发环境 (安装 kubectl + kind, 创建本地 K8s 集群)
-  build       编译并启动服务 (默认: hc-rpc + gateway-api)
+  build       编译并启动服务 (默认: hc-rpc + hc-gateway)
   docker      构建 Docker 镜像并部署到 K8s
   test        运行测试 (go test ./...)
   lint        代码检查 (go vet + gofmt)

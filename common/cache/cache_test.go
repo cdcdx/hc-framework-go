@@ -72,6 +72,26 @@ func TestCacheL1Only_SetGetDelete(t *testing.T) {
 	}
 }
 
+func TestCacheL1Only_ExistsMissingKey(t *testing.T) {
+	m := New(Config{
+		Enabled: true,
+		L1: L1Config{
+			Enabled:     true,
+			MaxMemoryMB: 64,
+			DefaultTTL:  time.Second,
+			NumCounters: 10_000,
+			MaxCost:     1 << 20,
+		},
+	})
+	defer m.Close()
+
+	ctx := context.Background()
+	// 未 Set 过的 key，即使布隆可能误判存在，实际缓存为空也应返回 false。
+	if m.Exists(ctx, "never:set:key") {
+		t.Fatal("exists should be false for a key that was never set")
+	}
+}
+
 func TestNilStore(t *testing.T) {
 	ns := &nilStore{}
 	ctx := context.Background()
