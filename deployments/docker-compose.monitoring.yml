@@ -1,0 +1,113 @@
+# ============================================================
+# 监控栈：Docker 版 Prometheus + Alertmanager（含网页 UI）
+# ------------------------------------------------------------
+# 把 deployments/prometheus/ 下的配置挂载进官方镜像，docker 起即开箱可用：
+#   - prometheus.yaml        （抓取 hc-framework、载入 rules、指向 Alertmanager）
+#   - alertmanager.yaml       （按 severity/component 路由告警）
+#   - rules/flash.yaml        （10309 超时容量告警：spike / ratio-high）
+#
+# 关键约定（避免「网页能开但抓不到数据」）：
+#   - 容器内 localhost 指向容器自身，不再是宿主机。Go 应用若跑在宿主机（make run /
+#     go run），抓取目标必须用 host.docker.internal:8080；本 compose 通过
+#     extra_hosts: host.docker.internal:host-gateway 把该域名映射到宿主机网关。
+#   - Prometheus 与 Alertmanager 同处 hc-monitoring-net 网络，故 prometheus.yaml 里
+#     写的 alertmanager:9093（容器服务名）可被解析。
+#   - 若 hc-framework 也跑在另一个 compose 网络里，把它 join 到 hc-monitoring-net，
+#     并把 prometheus.yaml 的 targets 改成该服务名（如 hc-framework:8080）。
+#
+# 使用（本机为 docker-compose 独立二进制，非 docker compose 插件）：
+#   docker-compose -f docker-compose.monitoring.yml up -d
+#   docker-compose -f docker-compose.monitoring.yml down        # 保留数据卷
+#   docker-compose -f docker-compose.monitoring.yml down -v     # 连同数据卷一起清除
+#
+# 网页：
+#   - Prometheus  UI  http://127.0.0.1:9090  （Status > Targets 看抓取健康度；
+#                                              Alerts 看 10309 告警；Graph 试 PromQL）
+#   - Alertmanager UI  http://127.0.0.1:9093  （看告警路由与静默）
+#   - Grafana      UI  http://127.0.0.1:3000  （admin / admin；自动导入 hc-framework 面板）
+# ============================================================
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.1
+    container_name: hc-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle        # 支持 POST /-/reload 热加载
+    ports:
+      - "9090:9090"                   # 宿主机 9090 -> 容器 9090（Prometheus 网页）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # 让容器能回连宿主机上的 Go 应用
+    volumes:
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - hc-prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - hc-monitoring-net
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: hc-alertmanager
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yaml
+      - --storage.path=/alertmanager
+    ports:
+      - "9093:9093"                   # 宿主机 9093 -> 容器 9093（Alertmanager 网页）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # 让容器能回连宿主机上的 webhook 接收器(:9095)
+    volumes:
+      - ./prometheus/alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro
+      - hc-alertmanager-data:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9093/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - hc-monitoring-net
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: hc-grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+      alertmanager:
+        condition: service_started
+    ports:
+      - "3000:3000"                   # 宿主机 3000 -> 容器 3000（Grafana 网页）
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      # provisioning：数据源（接 prometheus:9090）+ 仪表盘自动导入
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      # 仪表盘 JSON：挂载进 provider 的 path（/var/lib/grafana/dashboards）
+      - ./grafana/hc-framework-dashboard.json:/var/lib/grafana/dashboards/hc-framework-dashboard.json:ro
+      - hc-grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/api/health | grep -q '\"database\":\"ok\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - hc-monitoring-net
+
+volumes:
+  hc-prometheus-data:
+  hc-alertmanager-data:
+  hc-grafana-data:
+
+networks:
+  hc-monitoring-net:
+    name: hc-monitoring-net

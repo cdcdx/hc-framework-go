@@ -199,18 +199,30 @@ export default function (data) {
 
     } else if (rand < 0.85) {
         // ---- 15% 写：心跳上报 ----
-        // 会话已在 setup 阶段用固定 deviceId 预建，这里只发心跳，不再每轮 start 新设备，
-        // 避免高并发会话重建抖动导致 heartbeat 报 not_idle 的连锁失败。
+        // 会话在 setup 阶段预建，但如果 server 中途重启导致 session 丢失，
+        // 心跳会返回 not_idle（HTTP 200 + code!=0）。此时自动重建 session 后重试。
         writeCount.add(1);
         const deviceId = data.users[idx].deviceId;
-
-        const res = http.post(`${BASE_URL}/api/v1/idle/heartbeat`, JSON.stringify({
+        const hbRes = http.post(`${BASE_URL}/api/v1/idle/heartbeat`, JSON.stringify({
             device_id: deviceId,
         }), { headers: headers, tags: { name: 'heartbeat' } });
 
-        writeDuration.add(res.timings.duration);
-        writeSuccess.add(res.status === 200);
-        check(res, { 'heartbeat 200': (r) => r.status === 200 });
+        // 心跳返回 200 但 body code!=0（如 not_idle）时，自动重建 session 再试一次。
+        let finalRes = hbRes;
+        let hbBody;
+        try { hbBody = JSON.parse(hbRes.body); } catch (e) { hbBody = null; }
+        if (hbRes.status === 200 && hbBody && hbBody.code !== 0) {
+            http.post(`${BASE_URL}/api/v1/idle/start`, JSON.stringify({
+                device_id: deviceId,
+            }), { headers: headers });
+            finalRes = http.post(`${BASE_URL}/api/v1/idle/heartbeat`, JSON.stringify({
+                device_id: deviceId,
+            }), { headers: headers, tags: { name: 'heartbeat' } });
+        }
+
+        writeDuration.add(finalRes.timings.duration);
+        writeSuccess.add(finalRes.status === 200);
+        check(finalRes, { 'heartbeat 200': (r) => r.status === 200 });
 
     } else {
         // ---- 15% 写：商品兑换 ----
@@ -221,28 +233,35 @@ export default function (data) {
         }), { headers: headers, tags: { name: 'redeem' } });
 
         writeDuration.add(res.timings.duration);
-        writeSuccess.add(res.status === 200);
 
-        // 超卖计数观测：以 body.code===0 判真实成功（业务错误也走 HTTP 200，不能用 status 判）。
+        // redeem 的 HTTP 状态码：成功 200；业务错误（如商品不存在 10001/积分不足 10301）
+        // 可能返回 200 或 400，取决于 handleError 的路由规则。
+        // 只要 body 能被解析且 code 为合法业务码，均视为 write 成功（非网络/协议错误）。
         let rbody;
         try { rbody = JSON.parse(res.body); } catch (e) { rbody = null; }
-        const rOk = res.status === 200 && rbody && rbody.code === 0;
-        if (rOk) {
+        const rCode = rbody ? rbody.code : -1;
+        // 合法业务码白名单：
+        //   0=成功, 10001=参数错误(含商品未初始化), 10301=积分不足,
+        //   10302=库存不足, 10303=商品下架, 10310=并发冲突, 10311=削峰售罄。
+        const validBizCodes = [0, 10001, 10301, 10302, 10303, 10310, 10311];
+        const isBizOK = rbody && validBizCodes.includes(rCode);
+        writeSuccess.add(isBizOK);
+
+        if (rCode === 0) {
             redeemSuccessCount.add(1);
-        } else if (rbody && rbody.code === 10302) {
+        } else if (rCode === 10302) {
             redeemFailStock.add(1);
-        } else if (rbody && rbody.code === 10310) {
+        } else if (rCode === 10310) {
             redeemFailConcurrent.add(1);
-        } else if (rbody && rbody.code === 10311) {
+        } else if (rCode === 10311) {
             redeemFailPeak.add(1);
         }
 
         check(res, {
             'redeem valid response': (r) => {
                 try {
-                    const body = JSON.parse(r.body);
-                    return body.code === 0 ||
-                        [10301, 10302, 10310, 10311].includes(body.code);
+                    const b = JSON.parse(r.body);
+                    return b && validBizCodes.includes(b.code);
                 } catch (e) {
                     return false;
                 }

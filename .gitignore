@@ -56,6 +56,7 @@ reasonix.toml
 .env.local
 .env.production
 .env.*
+go.sum
 
 # 死信队列本地持久化
 dlq/
@@ -69,12 +70,15 @@ swagger/
 *.key
 *.p12
 *.pfx
-server
+
+# 注意：不要使用裸的 `server` 忽略规则，它会误伤名为 server 的源码目录。
+# 如需忽略某 server 二进制产物，请使用具体路径（如 /bin/server）。
+# 例外：保留 app/rpc/server 源码目录可被跟踪
+!app/rpc/server/
 
 # 本地真实配置副本/备份（含密钥，切勿提交）
 .backup/
-config/config.yaml
-config/config.stress.yaml
+config/server.yaml
 
 # K8s Secret（生产环境的实际密钥文件）
 deployments/secret-prod.yaml

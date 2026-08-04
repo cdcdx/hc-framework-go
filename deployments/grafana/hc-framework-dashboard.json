@@ -1,20 +1,12 @@
 {
   "annotations": {
-    "list": [
-      {
-        "builtIn": 1,
-        "datasource": {
-          "type": "grafana",
-          "uid": "-- Grafana --"
-        },
-        "enable": true,
-        "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
-        "name": "Annotations & Alerts",
-        "type": "dashboard"
-      }
-    ]
+    "list": [{
+      "builtIn": 1, "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+      "enable": true, "hide": true, "iconColor": "rgba(0, 211, 255, 1)",
+      "name": "Annotations & Alerts", "type": "dashboard"
+    }]
   },
+  "description": "HC Framework go-zero 版监控面板 (hc-server 单进程，指标经 :8080/metrics)",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -22,1741 +14,328 @@
   "liveNow": false,
   "panels": [
     {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "id": 1,
-      "panels": [],
-      "title": "流量与错误 (Traffic & Quality)",
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1, "panels": [], "title": "HTTP 流量概览 (hc-server)",
       "type": "row"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "spanNulls": false },
           "unit": "reqps"
-        },
-        "overrides": []
+        }
       },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 1
-      },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 1 },
       "id": 2,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(http_requests_total[5m])) by (path)",
-          "legendFormat": "{{path}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "QPS by Route",
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [{
+        "expr": "sum(rate(http_server_requests_code_total{job=\"hc-server\"}[1m])) by (path)",
+        "legendFormat": "{{path}}", "refId": "A"
+      }],
+      "title": "QPS 按路由 (HTTP Requests/s)",
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "unit": "percent",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 0.05
-              },
-              {
-                "color": "red",
-                "value": 0.1
-              }
-            ]
-          }
-        },
-        "overrides": []
+          "color": { "mode": "thresholds" },
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 },
+          "unit": "percent"
+        }
       },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 1
-      },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 1 },
       "id": 3,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "11.1.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "http_error_ratio",
-          "legendFormat": "5xx 错误率",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "HTTP Error Rate (5xx)",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 9
-      },
-      "id": 4,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
-          "legendFormat": "p95",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Request Latency p95",
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [{
+        "expr": "sum(rate(http_server_requests_code_total{job=\"hc-server\",code=~\"4..|5..\"}[1m])) / clamp_min(sum(rate(http_server_requests_code_total{job=\"hc-server\"}[1m])), 1e-9) * 100",
+        "legendFormat": "错误率 %", "refId": "A"
+      }],
+      "title": "HTTP 错误率 (4xx+5xx)",
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 11 },
+      "id": 4, "panels": [], "title": "延迟分布 (Latency)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "s",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 3
-              }
-            ]
-          }
-        },
-        "overrides": []
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "ms"
+        }
       },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 9
-      },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 12 },
       "id": 5,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
-          "legendFormat": "p99",
-          "range": true,
-          "refId": "A"
-        }
+        { "expr": "histogram_quantile(0.50, sum(rate(http_server_requests_duration_ms_bucket{job=\"hc-server\"}[5m])) by (le))", "legendFormat": "P50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_duration_ms_bucket{job=\"hc-server\"}[5m])) by (le))", "legendFormat": "P95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_duration_ms_bucket{job=\"hc-server\"}[5m])) by (le))", "legendFormat": "P99", "refId": "C" }
       ],
-      "title": "Request Latency p99",
+      "title": "HTTP 延迟 P50/P95/P99 (ms)",
       "type": "timeseries"
     },
     {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 17
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "ms"
+        }
       },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 12 },
       "id": 6,
-      "panels": [],
-      "title": "限流与熔断 (Rate Limit & Circuit Breaker)",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 18
-      },
-      "id": 7,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(rate_limit_total{result=\"rejected\"}[5m])) by (type)",
-          "legendFormat": "限流拒绝 {{type}}/s",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "rate(http_concurrency_rejected_total[5m])",
-          "legendFormat": "并发卸载(503)/s",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "限流拒绝 & 应用层负载卸载",
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_duration_ms_bucket{job=\"hc-server\"}[5m])) by (le, path))",
+        "legendFormat": "{{path}}", "refId": "A"
+      }],
+      "title": "P95 延迟 按路由 (ms)",
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "id": 7, "panels": [], "title": "业务指标 (DB / Flash / Idle Scan)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "green",
-                  "text": "Closed"
-                }
-              },
-              "type": "value"
-            },
-            {
-              "options": {
-                "1": {
-                  "color": "yellow",
-                  "text": "Half-Open"
-                }
-              },
-              "type": "value"
-            },
-            {
-              "options": {
-                "2": {
-                  "color": "red",
-                  "text": "Open"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "unit": "",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "percentunit"
+        }
       },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 18
-      },
+      "gridPos": { "h": 10, "w": 8, "x": 0, "y": 23 },
       "id": 8,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "circuit_breaker_state",
-          "legendFormat": "{{route}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Circuit Breaker State (0=Closed/1=Half-Open/2=Open)",
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [{
+        "expr": "db_pool_utilization",
+        "legendFormat": "{{db}}", "refId": "A"
+      }],
+      "title": "DB 连接池利用率",
       "type": "timeseries"
     },
     {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 26
-      },
-      "id": 9,
-      "panels": [],
-      "title": "缓存 (Cache)",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "unit": "percentunit",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 0.9
-              }
-            ]
-          },
-          "min": 0,
-          "max": 1
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 27
-      },
-      "id": 10,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "11.1.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "cache_l1_hit_ratio",
-          "legendFormat": "L1 hit ratio",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "L1 Cache Hit Ratio",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "bytes"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 27
-      },
-      "id": 11,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "cache_l1_size_bytes",
-          "legendFormat": "L1 size",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "L1 Cache Size (bytes)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 35
-      },
-      "id": 12,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(cache_l1_hits_total[5m]))",
-          "legendFormat": "hits",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(cache_l1_misses_total[5m]))",
-          "legendFormat": "misses",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "L1 Hits / Misses per second",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 35
-      },
-      "id": 13,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "rate(cache_l1_evictions_total[5m])",
-          "legendFormat": "evictions",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "L1 Evictions /s",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "text": "off"
-                }
-              },
-              "type": "value"
-            },
-            {
-              "options": {
-                "1": {
-                  "color": "green",
-                  "text": "on"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "unit": "",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 43
-      },
-      "id": 14,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "11.1.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "cache_l1_enabled",
-          "legendFormat": "L1",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "cache_l2_enabled",
-          "legendFormat": "L2",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "cache_bloom_enabled",
-          "legendFormat": "Bloom",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "cache_hotkey_enabled",
-          "legendFormat": "HotKey",
-          "range": true,
-          "refId": "D"
-        }
-      ],
-      "title": "Cache Components Enabled",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 43
-      },
-      "id": 15,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "11.1.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "cache_hotkey_count",
-          "legendFormat": "hot keys",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Hot Key Count",
-      "type": "stat"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 51
-      },
-      "id": 16,
-      "panels": [],
-      "title": "消息队列 (MQ)",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 52
-      },
-      "id": 17,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(mq_consumer_lag{type=\"kafka\"}) by (topic)",
-          "legendFormat": "{{topic}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Kafka 消费 Lag",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 52
-      },
-      "id": 18,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(mq_consumer_messages_total{type=\"kafka\"}[5m])) by (result)",
-          "legendFormat": "{{result}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Kafka 消费计数 rate (by result)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 60
-      },
-      "id": 19,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(rate(mq_consumer_fetch_errors_total{type=\"kafka\"}[5m]))",
-          "legendFormat": "fetch_errors",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Kafka 消费 Fetch 错误 rate",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 60
-      },
-      "id": 20,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum(mq_dlq_backlog)",
-          "legendFormat": "生产者DLQ积压",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "max(mq_consumer_lag)",
-          "legendFormat": "最大消费Lag",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "MQ DLQ 积压 & 消费 Lag",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 68
-      },
-      "id": 21,
-      "panels": [],
-      "title": "秒杀 (Flash Sale)",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "reqps",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "超时占比 %"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "percent"
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 69
-      },
-      "id": 22,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "rate(shop_flash_redeem_timeout_total[5m])",
-          "legendFormat": "超时请求/s",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "100 * shop_flash_redeem_timeout_total / clamp_min(sum(rate(shop_flash_redeem_total[5m])), 1e-9)",
-          "legendFormat": "超时占比 %",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "Flash Sale 处理超时 (10309) rate / 占比",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 80,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "normal"
-            }
-          },
-          "mappings": [],
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
           "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 69
-      },
-      "id": 23,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
         }
       },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum by (result) (rate(shop_flash_redeem_total[5m]))",
-          "legendFormat": "{{result}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Flash 抢购结果分布 (req/s)",
+      "gridPos": { "h": 10, "w": 8, "x": 8, "y": 23 },
+      "id": 9,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [{
+        "expr": "rate(db_pool_wait_count_total[1m])",
+        "legendFormat": "{{db}} 等待/s", "refId": "A"
+      }],
+      "title": "DB 连接池等待速率",
       "type": "timeseries"
     },
     {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 77
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "reqps"
+        }
       },
-      "id": 24,
-      "panels": [],
-      "title": "数据库 (DB Connection Pool)",
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 23 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "rate(shop_flash_redeem_total[1m])", "legendFormat": "抢购 总/s", "refId": "A" },
+        { "expr": "rate(shop_flash_redeem_timeout_total[1m])", "legendFormat": "抢购 超时/s ({{reason}})", "refId": "B" }
+      ],
+      "title": "抢购兑换 (总量 + 超时)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 33 },
+      "id": 19,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "idle_scan_duration_seconds_sum / idle_scan_duration_seconds_count", "legendFormat": "avg", "refId": "A" }
+      ],
+      "title": "Idle 离线扫描耗时 (avg s, 待埋点)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 41 },
+      "id": 11, "panels": [], "title": "Go 运行时 (Runtime)",
       "type": "row"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 78
-      },
-      "id": 25,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "db_pool_utilization",
-          "legendFormat": "{{db}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "DB 连接池利用率 (in_use/max, by db)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
           "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 78
-      },
-      "id": 26,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
         }
       },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "db_pool_open_connections",
-          "legendFormat": "open {{db}}",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "db_pool_in_use_connections",
-          "legendFormat": "in_use {{db}}",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "db_pool_idle_connections",
-          "legendFormat": "idle {{db}}",
-          "range": true,
-          "refId": "C"
-        }
-      ],
-      "title": "DB 连接池 open/in_use/idle (by db)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 42 },
+      "id": 12,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [{
+        "expr": "go_goroutines{job=\"hc-server\"}",
+        "legendFormat": "goroutines", "refId": "A"
+      }],
+      "title": "Goroutines 数量",
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 86
-      },
-      "id": 27,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "bytes"
         }
       },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "sum by (db) (rate(db_pool_wait_count_total[5m]))",
-          "legendFormat": "等待/s {{db}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "DB 连接池等待速率 (池耗尽信号, by db)",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 42 },
+      "id": 13,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [{
+        "expr": "go_memstats_alloc_bytes{job=\"hc-server\"}",
+        "legendFormat": "alloc", "refId": "A"
+      }],
+      "title": "内存使用 (Alloc)",
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            }
-          },
-          "mappings": [],
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 42 },
+      "id": 14,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "go_memstats_heap_inuse_bytes{job=\"hc-server\"}", "legendFormat": "heap", "refId": "A" },
+        { "expr": "go_memstats_stack_inuse_bytes{job=\"hc-server\"}", "legendFormat": "stack", "refId": "B" }
+      ],
+      "title": "堆/栈内存",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 50 },
+      "id": 15,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [{
+        "expr": "rate(go_gc_duration_seconds_sum{job=\"hc-server\"}[5m]) / rate(go_gc_duration_seconds_count{job=\"hc-server\"}[5m])",
+        "legendFormat": "GC avg", "refId": "A"
+      }],
+      "title": "GC 暂停时间 (avg)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
           "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 94
-      },
-      "id": 28,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
         }
       },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "db_pool_wait_count_total",
-          "legendFormat": "累计等待次数 {{db}}",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "editorMode": "code",
-          "expr": "db_pool_wait_duration_seconds_total",
-          "legendFormat": "累计等待时长(s) {{db}}",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "DB 连接池等待成本 (累计次数/时长, 池竞争直接证据)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 50 },
+      "id": 16,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [{
+        "expr": "process_open_fds{job=\"hc-server\"}",
+        "legendFormat": "fds", "refId": "A"
+      }],
+      "title": "文件描述符",
       "type": "timeseries"
     },
     {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 102
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "s"
+        }
       },
-      "id": 29,
-      "panels": [],
-      "title": "告警 (Alerts)",
-      "type": "row"
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 58 },
+      "id": 17,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [{
+        "expr": "time() - process_start_time_seconds{job=\"hc-server\"}",
+        "legendFormat": "uptime", "refId": "A"
+      }],
+      "title": "进程 Uptime",
+      "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "alertmanager",
-        "uid": "alertmanager"
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "unit": "reqps"
+        }
       },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 103
-      },
-      "id": 30,
-      "options": {
-        "alertInstanceLabelFilter": "",
-        "alertName": "",
-        "alertmanager": {
-          "name": "Alertmanager",
-          "uid": "alertmanager"
-        },
-        "dashboardAlerts": false,
-        "groupBy": [],
-        "groupMode": "default",
-        "limit": 20,
-        "maxItems": 20,
-        "show": "current",
-        "sortOrder": 2,
-        "stateFilter": [
-          "alerting",
-          "no_data"
-        ],
-        "viewMode": "list"
-      },
-      "title": "当前告警 (Alertmanager)",
-      "type": "alertlist"
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 58 },
+      "id": 18,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_code_total{job=\"hc-server\",code=\"200\"}[1m]))", "legendFormat": "2xx", "refId": "A" },
+        { "expr": "sum(rate(http_server_requests_code_total{job=\"hc-server\",code=~\"4..\"}[1m]))", "legendFormat": "4xx", "refId": "B" },
+        { "expr": "sum(rate(http_server_requests_code_total{job=\"hc-server\",code=~\"5..\"}[1m]))", "legendFormat": "5xx", "refId": "C" }
+      ],
+      "title": "HTTP 状态码分布 (req/s)",
+      "type": "timeseries"
     }
   ],
-  "refresh": "30s",
-  "schemaVersion": 39,
-  "tags": [
-    "hc-framework",
-    "go",
-    "prometheus"
-  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["hc-framework", "go-zero"],
   "templating": {
-    "list": [
-      {
-        "current": {
-          "selected": true,
-          "text": "Prometheus",
-          "value": "DS_PROMETHEUS"
-        },
-        "hide": 0,
-        "includeAll": false,
-        "label": "Prometheus",
-        "multi": false,
-        "name": "DS_PROMETHEUS",
-        "options": [],
-        "query": "prometheus",
-        "queryValue": "",
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
-        "type": "datasource"
-      }
-    ]
+    "list": [{
+      "current": { "selected": false, "text": "Prometheus", "value": "prometheus" },
+      "hide": 0, "label": "数据源", "name": "DS_PROMETHEUS", "query": "prometheus",
+      "type": "datasource"
+    }]
   },
-  "time": {
-    "from": "now-6h",
-    "to": "now"
-  },
+  "time": { "from": "now-15m", "to": "now" },
   "timepicker": {},
-  "timezone": "",
-  "title": "HC Framework Go - Overview",
-  "uid": "hc-framework-overview",
-  "version": 1,
+  "timezone": "browser",
+  "title": "HC Framework (go-zero)",
+  "uid": "hc-framework-go-zero",
+  "version": 3,
   "weekStart": ""
 }

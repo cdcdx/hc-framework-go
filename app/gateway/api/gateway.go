@@ -4,9 +4,9 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/config"
-	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/handler"
-	"github.com/cdcdx/hc-framework-go/app/gateway/api/internal/svc"
+	"github.com/cdcdx/hc-framework-go/app/gateway/api/config"
+	"github.com/cdcdx/hc-framework-go/app/gateway/api/handler"
+	"github.com/cdcdx/hc-framework-go/app/gateway/api/svc"
 	"github.com/zeromicro/go-zero/core/conf"
 	"github.com/zeromicro/go-zero/rest"
 )

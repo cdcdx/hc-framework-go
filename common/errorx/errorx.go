@@ -1,6 +1,6 @@
 // Package errorx 业务错误码与跨 rpc 错误传递。
-// 错误码定义与 gin 版完全一致（见原 internal/model/errors.go），
-// 通过 go-zero core/errorx 编码进 grpc status，网关侧统一解析回 HTTP 响应。
+// 错误码定义与 gin 版完全一致，通过 google.golang.org/grpc/status 编码
+// 进 grpc status（code=业务码, message=中文消息），网关侧用 Code()/Msg() 还原。
 package errorx
 
 import (
@@ -10,67 +10,93 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// 业务错误码（与 gin 版保持一致）
+// 业务错误码（与 gin 版保持一致，数值不可变以保证兼容性）。
+// 每个段独立一个 const 块，使用 iota 自增避免人工重复；
+// 段内追加新码只需在末尾加一行，无需手动调整偏移。
 const (
 	// 成功
 	CodeSuccess = 0
+)
 
-	// 通用错误 10000-10099
-	CodeInvalidParam       = 10001
-	CodeNotFound           = 10002
-	CodeUnknownError       = 10003
-	CodeGatewayTimeout     = 10004
-	CodeServiceUnavailable = 10005
+// 通用错误 10000-10099
+const (
+	_                      = iota + 10000 // 10000 占位
+	CodeInvalidParam                      // 10001
+	CodeNotFound                          // 10002
+	CodeUnknownError                      // 10003
+	CodeGatewayTimeout                    // 10004
+	CodeServiceUnavailable                // 10005
+)
 
-	// 认证授权 10100-10199
-	CodeTokenExpired     = 10101
-	CodeTokenInvalid     = 10102
-	CodePermissionDenied = 10103
-	CodeTokenBlacklisted = 10104
+// 认证授权 10100-10199
+const (
+	_                  = iota + 10100 // 10100 占位
+	CodeTokenExpired                  // 10101
+	CodeTokenInvalid                  // 10102
+	CodePermissionDenied              // 10103
+	CodeTokenBlacklisted              // 10104
+)
 
-	// 用户相关 10200-10299
-	CodeEmailRegistered = 10201
-	CodePasswordWrong   = 10202
-	CodeAccountLocked   = 10203
-	CodeAccountDisabled = 10204
-	CodeCaptchaRequired = 10205
+// 用户相关 10200-10299
+const (
+	_                   = iota + 10200 // 10200 占位
+	CodeEmailRegistered                 // 10201
+	CodePasswordWrong                   // 10202
+	CodeAccountLocked                   // 10203
+	CodeAccountDisabled                 // 10204
+	CodeCaptchaRequired                 // 10205
+)
 
-	// 积分/兑换 10300-10399
-	CodePointsInsufficient  = 10301
-	CodeStockInsufficient   = 10302
-	CodeItemOffline         = 10303
-	CodeDuplicateRedeem     = 10304
-	CodeFlashSaleNotStarted = 10305
-	CodeFlashSaleEnded      = 10306
-	CodeFlashSaleSoldOut    = 10307
-	CodeFlashSaleUserLimit  = 10308
-	CodeFlashSaleTimeout    = 10309
-	CodeRedeemConcurrent    = 10310
-	CodeRedeemSoldOutPeak   = 10311
+// 积分/兑换 10300-10399
+const (
+	_                      = iota + 10300 // 10300 占位
+	CodePointsInsufficient                 // 10301
+	CodeStockInsufficient                  // 10302
+	CodeItemOffline                        // 10303
+	CodeDuplicateRedeem                    // 10304
+	CodeFlashSaleNotStarted                // 10305
+	CodeFlashSaleEnded                     // 10306
+	CodeFlashSaleSoldOut                   // 10307
+	CodeFlashSaleUserLimit                 // 10308
+	CodeFlashSaleTimeout                   // 10309
+	CodeRedeemConcurrent                   // 10310
+	CodeRedeemSoldOutPeak                  // 10311
+)
 
-	// 挂机相关 10400-10499
-	CodeAlreadyIdle      = 10401
-	CodeNotIdle          = 10402
-	CodeKickedOffline    = 10403
-	CodeHeartbeatTimeout = 10404
-	CodeDailyPointsLimit = 10405
+// 挂机相关 10400-10499
+const (
+	_                = iota + 10400 // 10400 占位
+	CodeAlreadyIdle                  // 10401
+	CodeNotIdle                      // 10402
+	CodeKickedOffline                // 10403
+	CodeHeartbeatTimeout             // 10404
+	CodeDailyPointsLimit             // 10405
+)
 
-	// 任务相关 10500-10599
-	CodeTaskNotCompleted     = 10501
-	CodeTaskClaimed          = 10502
-	CodeTaskExpired          = 10503
-	CodeProgressInsufficient = 10504
+// 任务相关 10500-10599
+const (
+	_                      = iota + 10500 // 10500 占位
+	CodeTaskNotCompleted                   // 10501
+	CodeTaskClaimed                        // 10502
+	CodeTaskExpired                        // 10503
+	CodeProgressInsufficient               // 10504
+)
 
-	// 限流/熔断 10600-10699
-	CodeRateLimited   = 10601
-	CodeCircuitOpen   = 10602
-	CodeCaptchaVerify = 10603
+// 限流/熔断 10600-10699
+const (
+	_                = iota + 10600 // 10600 占位
+	CodeRateLimited                  // 10601
+	CodeCircuitOpen                  // 10602
+	CodeCaptchaVerify                // 10603
+)
 
-	// 系统内部错误 10700-10799
-	CodeDBError         = 10701
-	CodeRedisError      = 10702
-	CodeKafkaError      = 10703
-	CodeThirdPartyError = 10704
+// 系统内部错误 10700-10799
+const (
+	_                  = iota + 10700 // 10700 占位
+	CodeDBError                        // 10701
+	CodeRedisError                     // 10702
+	CodeKafkaError                     // 10703
+	CodeThirdPartyError                // 10704
 )
 
 // ErrorMessages 错误码 → 消息映射

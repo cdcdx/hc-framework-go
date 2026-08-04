@@ -2,14 +2,14 @@
 #
 # 定时抢购「处理超时」(业务码 10309) 容量告警规则。
 #
-# 指标 shop_flash_redeem_timeout_total 在 FlashRedeem 写事务因行锁/连接池等待超过
-# request_timeout deadline 被取消 (context.DeadlineExceeded) 时累加。该错误必伴随事务回滚、
+# 指标 shop_flash_redeem_timeout_total 在 FlashRedeem 因行锁/连接池等待/下游抖动超过
+# FlashSale.Timeout deadline 被取消 (context.DeadlineExceeded) 时累加。该错误必伴随事务回滚、
 # 不落库，客户端可安全重试（不会超卖），因此这是「容量不足」信号，不是正确性缺陷。
 #
-# 配套变更：
-#   - internal/metrics/metrics.go       新增 FlashSaleRedeemTimeoutTotal 指标
-#   - internal/service/shop/shop_service.go  FlashRedeem defer 中 errors.Is(DeadlineExceeded) 累加
-#   - internal/model/errors.go          业务码 10309「抢购处理超时，请稍后重试」
+# 配套变更（go-zero 版）：
+#   - common/metrics/metrics.go         新增 FlashRedeemTimeout / FlashRedeemTotal 指标
+#   - app/rpc/logic/flashredeemlogic.go  WithTimeout + DeadlineExceeded 时 Inc 并返 10309
+#   - common/errorx/errorx.go            业务码 10309「抢购处理超时，请稍后重试」
 #
 # 接入方式（需写在 prometheus 部署中）：
 #   rule_files:
@@ -42,11 +42,11 @@ groups:
             curl -s localhost:8080/metrics | grep shop_flash_redeem_timeout_total
 
       # 2) 超时占抢购总请求比例超阈值（>1%）：容量严重不足，升级 critical。
-      #    分母用 clamp_min 防除零（无流量时比例无意义，钳到 1e-9 使其为 0）。
+      #    分子分母均用 rate 保持量纲一致；分母用 clamp_min 防除零。
       - alert: FlashSaleRedeemTimeoutRatioHigh
         expr: |
-          shop_flash_redeem_timeout_total
-            / clamp_min(sum(rate(shop_flash_redeem_total[5m])), 1e-9) > 0.01
+          rate(shop_flash_redeem_timeout_total[5m])
+            / clamp_min(rate(shop_flash_redeem_total[5m]), 1e-9) > 0.01
         for: 5m
         labels:
           severity: critical

@@ -34,8 +34,8 @@ type siteVerifyResp struct {
 	Hostname   string   `json:"hostname,omitempty"`
 }
 
-// Verify 验证 token
-func (v *TurnstileVerifier) Verify(token, remoteIP string) (bool, error) {
+// verifyAt 与 Verify 同逻辑，但 endpoint 可注入（供单测替换桩服务器）。
+func (v *TurnstileVerifier) verifyAt(endpoint, token, remoteIP string) (bool, error) {
 	data := url.Values{}
 	data.Set("secret", v.secretKey)
 	data.Set("response", token)
@@ -43,10 +43,7 @@ func (v *TurnstileVerifier) Verify(token, remoteIP string) (bool, error) {
 		data.Set("remoteip", remoteIP)
 	}
 
-	resp, err := v.client.PostForm(
-		"https://challenges.cloudflare.com/turnstile/v0/siteverify",
-		data,
-	)
+	resp, err := v.client.PostForm(endpoint, data)
 	if err != nil {
 		return false, fmt.Errorf("turnstile verify: %w", err)
 	}
@@ -62,6 +59,11 @@ func (v *TurnstileVerifier) Verify(token, remoteIP string) (bool, error) {
 		return false, fmt.Errorf("turnstile failed: %v", r.ErrorCodes)
 	}
 	return true, nil
+}
+
+// Verify 验证 token（生产 endpoint）。
+func (v *TurnstileVerifier) Verify(token, remoteIP string) (bool, error) {
+	return v.verifyAt("https://challenges.cloudflare.com/turnstile/v0/siteverify", token, remoteIP)
 }
 
 // GetScriptSrc 获取前端脚本地址
@@ -85,8 +87,13 @@ func NewReCAPTCHAVerifier(siteKey, secretKey string) *ReCAPTCHAVerifier {
 	}
 }
 
-// Verify 验证 token
+// Verify 验证 token（生产 endpoint）。
 func (v *ReCAPTCHAVerifier) Verify(token, remoteIP string) (bool, error) {
+	return v.verifyAt("https://www.google.com/recaptcha/api/siteverify", token, remoteIP)
+}
+
+// verifyAt 与 Verify 同逻辑，但 endpoint 可注入（供单测替换桩服务器）。
+func (v *ReCAPTCHAVerifier) verifyAt(endpoint, token, remoteIP string) (bool, error) {
 	data := url.Values{}
 	data.Set("secret", v.secretKey)
 	data.Set("response", token)
@@ -94,10 +101,7 @@ func (v *ReCAPTCHAVerifier) Verify(token, remoteIP string) (bool, error) {
 		data.Set("remoteip", remoteIP)
 	}
 
-	resp, err := v.client.PostForm(
-		"https://www.google.com/recaptcha/api/siteverify",
-		data,
-	)
+	resp, err := v.client.PostForm(endpoint, data)
 	if err != nil {
 		return false, fmt.Errorf("recaptcha verify: %w", err)
 	}
@@ -136,15 +140,20 @@ func NewhCAPTCHAVerifier(siteKey, secretKey string) *hCAPTCHAVerifier {
 	}
 }
 
-// Verify 验证 token
+// Verify 验证 token（生产 endpoint）。
 func (v *hCAPTCHAVerifier) Verify(token, remoteIP string) (bool, error) {
+	return v.verifyAt("https://api.hcaptcha.com/siteverify", token, remoteIP)
+}
+
+// verifyAt 与 Verify 同逻辑，但 endpoint 可注入（供单测替换桩服务器）。
+func (v *hCAPTCHAVerifier) verifyAt(endpoint, token, remoteIP string) (bool, error) {
 	body := bytes.NewBufferString(fmt.Sprintf(
 		"secret=%s&response=%s&remoteip=%s",
 		v.secretKey, token, remoteIP,
 	))
 
 	resp, err := v.client.Post(
-		"https://api.hcaptcha.com/siteverify",
+		endpoint,
 		"application/x-www-form-urlencoded",
 		body,
 	)
@@ -190,6 +199,11 @@ type TencentVerifyResp struct {
 
 // Verify 验证 token（格式: ticket|randstr）
 func (v *TencentVerifier) Verify(token, remoteIP string) (bool, error) {
+	return v.verifyAt("https://ssl.captcha.qq.com/ticket/verify", token, remoteIP)
+}
+
+// verifyAt 与 Verify 同逻辑，但 endpoint 可注入（供单测替换桩服务器）。
+func (v *TencentVerifier) verifyAt(endpoint, token, remoteIP string) (bool, error) {
 	parts := strings.SplitN(token, "|", 2)
 	ticket := token
 	randStr := ""
@@ -198,7 +212,7 @@ func (v *TencentVerifier) Verify(token, remoteIP string) (bool, error) {
 		randStr = parts[1]
 	}
 
-	u, _ := url.Parse("https://ssl.captcha.qq.com/ticket/verify")
+	u, _ := url.Parse(endpoint)
 	q := url.Values{}
 	q.Set("aid", v.appID)
 	q.Set("AppSecretKey", v.secretKey)

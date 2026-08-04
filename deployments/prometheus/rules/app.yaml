@@ -11,22 +11,24 @@ groups:
   - name: hc-framework-system
     rules:
       # 0) 实例存活：抓取失败即最高优先级
+      #    注意：合并部署后 scrape job 名为 hc-server（见 prometheus.yaml）。
       - alert: ServiceDown
-        expr: up{job="hc-framework"} == 0
+        expr: up{job="hc-server"} == 0
         for: 1m
         labels:
           severity: critical
           component: platform
         annotations:
-          summary: "hc-framework 实例不可达"
-          description: "job=hc-framework 的 up = {{ $value }}，持续 1m。Prometheus 已无法抓取 /metrics，可能进程崩溃或网络隔离。"
-          runbook: "docker ps 检查容器；查看应用日志。"
+          summary: "hc-server 实例不可达"
+          description: "job=hc-server 的 up = {{ $value }}，持续 1m。Prometheus 已无法抓取 /metrics，可能进程崩溃或网络隔离。"
+          runbook: "检查进程是否存活（systemctl status hc-server / docker ps）；查看应用日志。"
 
       # 1) HTTP 5xx 错误率（双档）
+      #    使用 go-zero 自带指标 http_server_requests_code_total（标签 method/path/code）。
       - alert: HTTPErrorRateHigh
         expr: |
-          sum(rate(http_requests_total{status=~"5.."}[5m]))
-            / clamp_min(sum(rate(http_requests_total[5m])), 1e-9) > 0.05
+          sum(rate(http_server_requests_code_total{code=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_server_requests_code_total[5m])), 1e-9) > 0.05
         for: 5m
         labels:
           severity: warning
@@ -36,8 +38,8 @@ groups:
           description: "近 5m 5xx 占比 = {{ $value | humanizePercentage }}。后端异常 / 依赖抖动。"
       - alert: HTTPErrorRateCritical
         expr: |
-          sum(rate(http_requests_total{status=~"5.."}[5m]))
-            / clamp_min(sum(rate(http_requests_total[5m])), 1e-9) > 0.10
+          sum(rate(http_server_requests_code_total{code=~"5.."}[5m]))
+            / clamp_min(sum(rate(http_server_requests_code_total[5m])), 1e-9) > 0.10
         for: 5m
         labels:
           severity: critical
@@ -47,10 +49,11 @@ groups:
           description: "近 5m 5xx 占比 = {{ $value | humanizePercentage }}。系统严重退化。"
 
       # 2) P99 延迟（双档）
+      #    go-zero 直方图指标为 http_server_requests_duration_ms，单位毫秒。
       - alert: HTTPP99LatencyHigh
         expr: |
           histogram_quantile(0.99,
-            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 1
+            sum(rate(http_server_requests_duration_ms_bucket[5m])) by (le)) > 1000
         for: 5m
         labels:
           severity: warning
@@ -61,7 +64,7 @@ groups:
       - alert: HTTPP99LatencyCritical
         expr: |
           histogram_quantile(0.99,
-            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 3
+            sum(rate(http_server_requests_duration_ms_bucket[5m])) by (le)) > 3000
         for: 5m
         labels:
           severity: critical
@@ -70,130 +73,16 @@ groups:
           summary: "HTTP P99 延迟 > 3s"
           description: "P99 = {{ $value | humanizeDuration }}。用户体验严重受损。"
 
-      # 3) 熔断打开
-      - alert: CircuitBreakerOpen
-        expr: max by (route) (circuit_breaker_state) == 2
-        for: 1m
-        labels:
-          severity: critical
-          component: resilience
-        annotations:
-          summary: "熔断已打开 (route={{ $labels.route }})"
-          description: "circuit_breaker_state=2 持续 1m，下游依赖持续失败。"
-          runbook: "检查 route 对应下游健康度与日志。"
-
-      # 4) 限流拒绝 / 应用层负载卸载（load shedding）
-      - alert: RateLimitRejectionsHigh
-        expr: sum(rate(rate_limit_total{result="rejected"}[5m])) > 10
-        for: 5m
-        labels:
-          severity: warning
-          component: http
-        annotations:
-          summary: "限流拒绝速率偏高"
-          description: "近 5m 限流拒绝 = {{ $value | humanize }} req/s。"
-      - alert: LoadSheddingActive
-        expr: increase(http_concurrency_rejected_total[5m]) > 0
-        for: 2m
-        labels:
-          severity: warning
-          component: resilience
-        annotations:
-          summary: "应用层并发上限触发负载卸载 (503)"
-          description: "近 5m 被并发上限拒绝 {{ $value | humanize }} 次，在途请求已达 server.concurrency_limit，后端承压。"
-
-      # 5) MQ
-      - alert: MQProducerDLQBacklog
-        expr: sum(mq_dlq_backlog) > 0
-        for: 5m
-        labels:
-          severity: warning
-          component: mq
-        annotations:
-          summary: "MQ 生产者 DLQ 积压 > 0"
-          description: "mq_dlq_backlog = {{ $value | humanize }}，broker 不可达/过载导致消息降级落盘（恢复后 replay）。"
-      - alert: MQMessagesDropped
-        expr: increase(mq_producer_dropped_total[5m]) > 0
-        for: 2m
-        labels:
-          severity: critical
-          component: mq
-        annotations:
-          summary: "MQ 消息被真正丢弃（不可 replay）"
-          description: "increase = {{ $value | humanize }}，内存缓冲满或总线禁用(mq.type=none)，消息丢失。"
-      - alert: MQConsumerFetchErrors
-        expr: increase(mq_consumer_fetch_errors_total[5m]) > 0
-        for: 5m
-        labels:
-          severity: warning
-          component: mq
-        annotations:
-          summary: "MQ 消费侧拉取错误"
-          description: "近 5m fetch errors = {{ $value | humanize }}，broker 瞬时不可用。"
-      - alert: MQConsumerLagHigh
-        expr: max(mq_consumer_lag) > 10000
-        for: 5m
-        labels:
-          severity: warning
-          component: mq
-        annotations:
-          summary: "MQ 消费 lag 过高"
-          description: "max lag = {{ $value | humanize }} 条，消费滞后可能积压事件。"
-
-      # 6) 缓存
-      - alert: CacheL1HitRatioLow
-        expr: cache_l1_hit_ratio < 0.5 and cache_l1_enabled == 1
-        for: 10m
-        labels:
-          severity: warning
-          component: cache
-        annotations:
-          summary: "L1 缓存命中率 < 50%"
-          description: "命中率 = {{ $value | humanizePercentage }}，回源压力增大。"
-
-      # 7) 调度
-      - alert: SchedulerJobPanics
-        expr: increase(scheduler_job_panics_total[10m]) > 0
-        for: 0m
-        labels:
-          severity: warning
-          component: scheduler
-        annotations:
-          summary: "调度任务 panic (job={{ $labels.job }})"
-          description: "近 10m panic 次数 = {{ $value | humanize }}。"
-      - alert: SchedulerJobFailures
-        expr: increase(scheduler_job_failures_total[10m]) > 0
-        for: 10m
-        labels:
-          severity: warning
-          component: scheduler
-        annotations:
-          summary: "调度任务执行失败 (job={{ $labels.job }})"
-          description: "近 10m 失败次数 = {{ $value | humanize }}，底层依赖可能持续不可用。"
-
-      # 8) 链路追踪
-      - alert: TraceSpansDropped
-        expr: increase(trace_spans_dropped_total[10m]) > 0
-        for: 10m
-        labels:
-          severity: warning
-          component: tracing
-        annotations:
-          summary: "Trace span 被丢弃"
-          description: "近 10m 丢弃 = {{ $value | humanize }}，OTLP collector 不可达/背压。"
-
-      # 9) 挂机离线扫描耗时
-      - alert: IdleScanSlow
-        expr: |
-          histogram_quantile(0.95,
-            sum(rate(idle_scan_duration_seconds_bucket[5m])) by (le)) > 30
-        for: 10m
-        labels:
-          severity: warning
-          component: idle
-        annotations:
-          summary: "挂机离线扫描耗时偏长 (p95>30s)"
-          description: "p95 = {{ $value | humanizeDuration }}。"
+      # ===== 以下规则依赖的子系统的自定义指标，本仓库 go-zero 版尚未实现对应埋点，
+      #      故当前为「休眠规则」（表达式求值无数据，不会误报）。保留以记录预期监控意图，
+      #      待对应子系统接入后自动生效。 =====
+      # 3) 熔断打开（circuit_breaker_state 待 resilience 中间件埋点）
+      # 4) 限流拒绝（rate_limit_total / http_concurrency_rejected_total 待网关中间件埋点）
+      # 5) MQ（mq_* 待消息总线子系统）
+      # 6) 缓存（cache_l1_* 待 L1 缓存层）
+      # 7) 调度（scheduler_job_* 待定时任务框架）
+      # 8) 链路追踪（trace_spans_dropped_total 待 OTel exporter）
+      # 9) 挂机离线扫描耗时（idle_scan_duration_seconds 已注册指标，待 idle 扫描逻辑埋点）
 
   # 运行时资源告警：基于自定义 Registry 注册的 GoCollector / ProcessCollector
   # （go_goroutines / go_memstats_* / process_*）。这些指标只在应用存活并被抓取时存在。

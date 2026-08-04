@@ -12,14 +12,14 @@ Alertmanager 路由 -> webhook 送达」整条链路，无需接入 Slack/PagerD
   python3 scripts/webhook_receiver.py            # 监听 :9095
   python3 scripts/webhook_receiver.py 9096       # 指定端口
 
-日志：/tmp/alertmanager_webhook.log
+日志：./logs/alertmanager_webhook.log
 """
 import json
 import sys
 import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-LOG_PATH = "/tmp/alertmanager_webhook.log"
+LOG_PATH = "./logs/alertmanager_webhook.log"
 
 
 class Handler(BaseHTTPRequestHandler):

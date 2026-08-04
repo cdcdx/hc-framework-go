@@ -81,6 +81,7 @@ type ShopFlashActivity struct {
 	EndTime      *time.Time `json:"end_time"`                                 // 结束时间；nil 表示不限结束
 	LimitQty     int        `json:"limit_qty" gorm:"not null;default:0"`      // 全场限量总数
 	SoldQty      int        `json:"sold_qty" gorm:"not null;default:0"`       // 已抢数量（DB 权威计数）
+	BucketCount  int        `json:"bucket_count" gorm:"not null;default:1"`   // 库存分桶数：>1 时 user_id 哈希到桶，降低行锁竞争；<=1 退化为单行锁
 	PerUserLimit int        `json:"per_user_limit" gorm:"not null;default:1"` // 每人限购（<=0 视为 1）
 	PricePoints  int64      `json:"price_points" gorm:"not null;default:0"`   // 抢购价（积分），覆盖商品原价
 	Status       string     `json:"status" gorm:"index;default:'active';type:varchar(20)"`

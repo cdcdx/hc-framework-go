@@ -1,0 +1,178 @@
+# ============================================================
+# HC Framework (go-zero) · 完整配置示例
+# ============================================================
+# 使用方式: cp config/server.example.yaml config/server.yaml
+#           然后按需修改即可启动。
+#
+# 多库说明: Databases 段支持 business / user / monitor / log 四个库。
+#           每个库通过 Driver 字段 + vendor 段（Mysql.Master / Postgres.Master）
+#           可在 sqlite/mysql/postgres 之间无缝切换。
+#           当前所有业务表共用 business 库；其余库为占位，待按域拆分后生效。
+# ============================================================
+
+Gateway:
+  Name: gateway-api
+  Host: 0.0.0.0
+  Port: 8080
+
+  Auth:
+    Jwt:
+      Algorithm: HS256
+      SigningKey: "change-me-32-byte-secret-key-here"
+      Issuer: hc-framework
+      AccessTTL: 2h
+      RefreshTTL: 168h
+
+  Captcha:
+    Enabled: false
+    Provider: turnstile
+    SiteKey: ""
+    SecretKey: ""
+    AppID: ""
+
+  Security:
+    IPLimitEnabled: false
+    IPLimitPerMinute: 30
+
+  Log:
+    ServiceName: gateway-api
+    Mode: console
+    Encoding: plain
+    TimeFormat: "2006-01-02T15:04:05.000"
+    Level: info
+    Path: logs
+    Rotation: size
+    KeepDays: 7
+    MaxSize: 256
+    Compress: false
+
+  Middlewares:
+    Prometheus: true
+    Log: true
+    Recover: true
+    MaxConns: true
+    Breaker: false
+    Shedding: false
+    Timeout: true
+
+Rpc:
+  Name: hc.rpc
+
+  # =====================================================================
+  # 多库配置
+  # =====================================================================
+  # 每个库通过 Driver + vendor 段配置，改 Driver 即可切换数据库。
+  #
+  # 方式 1 — 最简（sqlite，零依赖起步）:
+  #   Driver: sqlite
+  #   Dsn: file:./data/hc.db?cache=shared&_journal_mode=WAL
+  #
+  # 方式 2 — MySQL（对标 gin 版 database.<name>.mysql）:
+  #   Driver: mysql
+  #   Mysql:
+  #     Master: user:pass@tcp(127.0.0.1:3306)/hc_business?charset=utf8mb4&parseTime=true
+  #     MaxOpenConns: 50
+  #
+  # 方式 3 — PostgreSQL（对标 gin 版 database.<name>.postgres）:
+  #   Driver: postgres
+  #   Postgres:
+  #     Master: postgres://user:pass@127.0.0.1:5432/hc_business?sslmode=disable
+  #     MaxOpenConns: 50
+  # =====================================================================
+  Databases:
+    # ---- 业务主库（必配）----
+    business:
+      Driver: sqlite
+      Dsn: file:./data/hc_business.db?cache=shared&_journal_mode=WAL
+      MaxOpenConns: 10
+      MaxIdleConns: 5
+      ConnMaxLifetime: 1h
+      PoolLabel: business
+
+    # ---- 用户库（待拆分）----
+    user:
+      Driver: sqlite
+      Dsn: file:./data/hc_users.db?cache=shared&_journal_mode=WAL
+      MaxOpenConns: 10
+      MaxIdleConns: 5
+      ConnMaxLifetime: 1h
+      PoolLabel: user
+
+    # ---- 监控库（待拆分）----
+    monitor:
+      Driver: sqlite
+      Dsn: file:./data/hc_monitor.db?cache=shared&_journal_mode=WAL
+      MaxOpenConns: 10
+      MaxIdleConns: 5
+      ConnMaxLifetime: 1h
+      PoolLabel: monitor
+
+    # ---- 日志库（待拆分）----
+    log:
+      Driver: sqlite
+      Dsn: file:./data/hc_logs.db?cache=shared&_journal_mode=WAL
+      MaxOpenConns: 10
+      MaxIdleConns: 5
+      ConnMaxLifetime: 1h
+      PoolLabel: log
+
+  # ---------- 缓存 ----------
+  Cache:
+    Enabled: false
+    L1:
+      Enabled: false
+      MaxMemoryMB: 256
+      DefaultTTL: 5m
+    L2:
+      Enabled: false
+      Type: redis
+      Addresses:
+        - "127.0.0.1:6379"
+      PoolSize: 200
+
+  # ---------- 消息队列 ----------
+  MQ:
+    Enabled: false
+    Type: memory
+
+  # ---------- JWT / 业务参数 ----------
+  Jwt:
+    Algorithm: HS256
+    SigningKey: "change-me-32-byte-secret-key-here"
+    Issuer: hc-framework
+    AccessTTL: 2h
+    RefreshTTL: 168h
+    PrivateKeyPath: ""
+    PublicKeyPath: ""
+
+  BcryptCost: 4
+
+  GoogleOAuth:
+    ClientID: ""
+    ClientSecret: ""
+    RedirectURI: "http://localhost:8080/api/v1/auth/google"
+
+  Idle:
+    MaxActiveDevices: 3
+    PointsPerMinute: 10
+    DailyPointsLimit: 14400
+    TimeoutMinutes: 5
+    ScanInterval: 30s
+
+  FlashSale:
+    Timeout: 3s
+
+  Log:
+    ServiceName: hc-rpc
+    Mode: console
+    Encoding: plain
+    TimeFormat: "2006-01-02T15:04:05.000"
+    Level: info
+    Path: logs
+    Rotation: size
+    KeepDays: 7
+    MaxSize: 256
+    Compress: false
+
+  Telemetry:
+    Name: hc.rpc

@@ -17,7 +17,13 @@ require (
 	gorm.io/gorm v1.31.2
 )
 
-require github.com/swaggo/swag v1.16.6
+require (
+	github.com/dgraph-io/ristretto/v2 v2.4.2
+	github.com/prometheus/client_golang v1.20.5
+	github.com/redis/go-redis/v9 v9.7.0
+	github.com/segmentio/kafka-go v0.4.51
+	github.com/swaggo/swag v1.16.6
+)
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
@@ -29,6 +35,7 @@ require (
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
@@ -55,6 +62,7 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -64,11 +72,10 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/openzipkin/zipkin-go v0.4.3 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
-	github.com/prometheus/client_golang v1.20.5 // indirect
+	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
-	github.com/redis/go-redis/v9 v9.7.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	go.etcd.io/etcd/api/v3 v3.5.15 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.15 // indirect

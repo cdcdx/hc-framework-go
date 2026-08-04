@@ -9,7 +9,7 @@
 set -euo pipefail
 
 MIGRATIONS_DIR="./migrations"
-CONFIG_FILE="${CONFIG_FILE:-config/config.yaml}"
+CONFIG_FILE="${CONFIG_FILE:-config/server.yaml}"
 MIGRATE_CMD="go run -tags sqlite3,mysql,postgres,clickhouse github.com/golang-migrate/migrate/v4/cmd/migrate@latest"
 
 # 颜色
