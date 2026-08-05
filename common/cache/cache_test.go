@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -110,4 +111,73 @@ func TestNilBloom(t *testing.T) {
 	if !nb.MightContain("k") {
 		t.Fatal("nilBloom should always return true (pass-through)")
 	}
+}
+
+// TestBloomNoFalseNegative 布隆过滤器核心不变量：绝不产生假阴性。
+//
+// 回归背景：早期实现用 Ristretto（LFU 淘汰）冒充布隆，key 被淘汰后
+// MightContain 返回 false，导致 Manager.Exists 把仍在缓存中的数据
+// 误判为不存在。实测 18396 个存活 key 中有 1444 个（7.8%）被误判。
+func TestBloomNoFalseNegative(t *testing.T) {
+	b := newBitsetBloom(10_000, 0.01)
+	const n = 50_000 // 故意超出预期容量 5 倍，验证饱和后仍无假阴性
+	for i := 0; i < n; i++ {
+		b.Add(bloomKey(i))
+	}
+	for i := 0; i < n; i++ {
+		if !b.MightContain(bloomKey(i)) {
+			t.Fatalf("false negative on key %d: 已 Add 的 key 必须返回 true", i)
+		}
+	}
+}
+
+// TestBloomFiltersUnknownKeys 布隆应过滤掉绝大多数未插入的 key。
+func TestBloomFiltersUnknownKeys(t *testing.T) {
+	b := newBitsetBloom(100_000, 0.01)
+	for i := 0; i < 10_000; i++ {
+		b.Add(bloomKey(i))
+	}
+	fp := 0
+	const probes = 10_000
+	for i := 1_000_000; i < 1_000_000+probes; i++ {
+		if b.MightContain(bloomKey(i)) {
+			fp++
+		}
+	}
+	if rate := float64(fp) / probes; rate > 0.05 {
+		t.Errorf("假阳性率 %.2f%% 过高，穿透保护失效", rate*100)
+	}
+}
+
+// TestManagerExistsAfterBloomSaturation 端到端验证：大量写入后
+// 仍在 L1 中的 key，Exists 必须返回 true。
+func TestManagerExistsAfterBloomSaturation(t *testing.T) {
+	m := New(Config{
+		Enabled: true,
+		L1: L1Config{
+			Enabled: true, DefaultTTL: time.Minute,
+			NumCounters: 1000, MaxCost: 1 << 20,
+		},
+	})
+	defer m.Close()
+
+	ctx := context.Background()
+	const n = 20_000
+	for i := 0; i < n; i++ {
+		_ = m.Set(ctx, bloomKey(i), []byte("v"), time.Minute)
+	}
+	for i := 0; i < n; i++ {
+		k := bloomKey(i)
+		val, _ := m.l1.Get(ctx, k)
+		if val == nil {
+			continue // 已被 L1 淘汰，不在本用例断言范围内
+		}
+		if !m.Exists(ctx, k) {
+			t.Fatalf("key %s 仍在 L1 中，Exists 却返回 false", k)
+		}
+	}
+}
+
+func bloomKey(i int) string {
+	return "bloom:key:" + strconv.Itoa(i)
 }

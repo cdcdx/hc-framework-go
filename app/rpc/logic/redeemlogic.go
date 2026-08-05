@@ -6,6 +6,7 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
 	"gorm.io/gorm"
@@ -36,7 +37,7 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 	// 商品在售校验
 	var item model.ShopItem
 	err := l.svcCtx.Db.Where("id = ? AND is_active = ?", in.ItemId, true).First(&item).Error
-	if err == gorm.ErrRecordNotFound {
+	if gormx.IsRecordNotFound(err) {
 		return nil, errorx.New(errorx.CodeItemOffline)
 	}
 	if err != nil {

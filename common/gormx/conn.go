@@ -4,6 +4,7 @@ package gormx
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -14,6 +15,17 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// IsRecordNotFound 鲁棒判定"查无记录"错误。
+// gorm 在部分驱动/链路下会用 fmt.Errorf 包装 ErrRecordNotFound，
+// 上层直接 `== gorm.ErrRecordNotFound` 会漏判（误报 CodeDBError 而非 CodeNotFound）。
+// 此处同时兼容直接相等与 errors.Is 包装两种情形。
+func IsRecordNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, gorm.ErrRecordNotFound)
+}
 
 // PoolConfig 连接池配置（0 表示使用驱动默认值）。
 type PoolConfig struct {

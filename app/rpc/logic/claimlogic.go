@@ -7,9 +7,9 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
-	"gorm.io/gorm"
 )
 
 // ClaimLogic 领取任务奖励（奖励入账为进程内调用 user 域 AddPoints）
@@ -30,7 +30,7 @@ func NewClaimLogic(ctx context.Context, svcCtx *svc.ServiceContext) *ClaimLogic 
 func (l *ClaimLogic) Claim(in *hc.TaskClaimRequest) (*hc.TaskClaimResponse, error) {
 	var t model.Task
 	err := l.svcCtx.Db.Where("id = ?", in.TaskId).First(&t).Error
-	if err == gorm.ErrRecordNotFound {
+	if gormx.IsRecordNotFound(err) {
 		return nil, errorx.New(errorx.CodeNotFound, "task not found")
 	}
 	if err != nil {
@@ -42,7 +42,7 @@ func (l *ClaimLogic) Claim(in *hc.TaskClaimRequest) (*hc.TaskClaimResponse, erro
 	err = l.svcCtx.Db.
 		Where("user_id = ? AND task_id = ? AND period = ?", in.UserId, in.TaskId, period).
 		First(&p).Error
-	if err == gorm.ErrRecordNotFound || (err == nil && !p.IsCompleted) {
+	if (gormx.IsRecordNotFound(err)) || (err == nil && !p.IsCompleted) {
 		return nil, errorx.New(errorx.CodeTaskNotCompleted)
 	}
 	if err != nil {

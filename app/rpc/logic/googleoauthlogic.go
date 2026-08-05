@@ -12,10 +12,10 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/google/uuid"
 	"github.com/zeromicro/go-zero/core/logx"
-	"gorm.io/gorm"
 )
 
 // GoogleOAuthLogic Google OAuth 登录/注册
@@ -122,7 +122,7 @@ func (l *GoogleOAuthLogic) findOrCreate(info googleUserInfo) (*model.User, error
 		}
 		return &u, nil
 	}
-	if err != gorm.ErrRecordNotFound {
+	if !gormx.IsRecordNotFound(err) {
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
@@ -137,7 +137,7 @@ func (l *GoogleOAuthLogic) findOrCreate(info googleUserInfo) (*model.User, error
 		}
 		return &u, nil
 	}
-	if err != gorm.ErrRecordNotFound {
+	if !gormx.IsRecordNotFound(err) {
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 

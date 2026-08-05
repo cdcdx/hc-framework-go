@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cdcdx/hc-framework-go/common/dbclient"
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
@@ -181,15 +182,67 @@ func (c *DBConfig) ResolveDSN() (driver, dsn string, err error) {
 func (c *DBConfig) IsSQL() bool {
 	d, _, _ := c.ResolveDSN()
 	switch d {
-	case "sqlite", "mysql", "postgres":
+	case "sqlite", "mysql", "postgres", "postgresql":
 		return true
 	default:
 		return false
 	}
 }
 
+// resolvePool 计算最终连接池参数。
+// 优先级: 与 driver 匹配的 vendor 段 > 顶层通用字段。
+func (c *DBConfig) resolvePool(driver string) (maxOpen, maxIdle int, connMax time.Duration) {
+	maxOpen, maxIdle, connMax = c.MaxOpenConns, c.MaxIdleConns, c.ConnMaxLifetime
+
+	var v DBVendorConfig
+	switch driver {
+	case "mysql":
+		v = c.Mysql
+	case "postgres", "postgresql":
+		v = c.Postgres
+	default:
+		return
+	}
+
+	if v.MaxOpenConns > 0 {
+		maxOpen = v.MaxOpenConns
+		maxIdle = v.MaxIdleConns
+	}
+	if v.ConnMaxLifetime > 0 {
+		connMax = v.ConnMaxLifetime
+	}
+	return
+}
+
 // Databases 按名称索引多库配置。
 type Databases map[string]DBConfig
+
+// ToSpecs 将配置层的多库配置适配为 dbclient.Specs。
+//
+// 这是 config → dbclient 的**单向适配点**：DSN 解析与连接池优先级在此完成，
+// dbclient 只消费解析后的结果，因此 common 层无需反向依赖 app 层配置结构。
+// 解析失败的库会被跳过（保留 Driver 以便 Factory 返回有意义的错误）。
+func (d Databases) ToSpecs() dbclient.Specs {
+	specs := make(dbclient.Specs, len(d))
+	for name, cfg := range d {
+		driver, dsn, err := cfg.ResolveDSN()
+		if err != nil {
+			logx.Errorf("[db] resolve %s failed, skipped: %v", name, err)
+			specs[name] = dbclient.DBSpec{Driver: cfg.Driver, PoolLabel: cfg.PoolLabel}
+			continue
+		}
+		maxOpen, maxIdle, connMax := cfg.resolvePool(driver)
+		specs[name] = dbclient.DBSpec{
+			Driver:          driver,
+			DSN:             dsn,
+			PoolLabel:       cfg.PoolLabel,
+			MaxOpenConns:    maxOpen,
+			MaxIdleConns:    maxIdle,
+			ConnMaxLifetime: connMax,
+		}
+	}
+	return specs
+}
 
 // Config 单一领域后端配置（合并 user/idle/task/shop 四个域）。
 type Config struct {
@@ -252,9 +305,20 @@ type Config struct {
 
 // CacheConfig 缓存配置。
 type CacheConfig struct {
-	Enabled bool          `json:",default=true"`
-	L1      L1CacheConfig `json:",optional"`
-	L2      L2CacheConfig `json:",optional"`
+	Enabled bool             `json:",default=true"`
+	L1      L1CacheConfig    `json:",optional"`
+	L2      L2CacheConfig    `json:",optional"`
+	Bloom   BloomCacheConfig `json:",optional"`
+}
+
+// BloomCacheConfig 布隆过滤器配置（缓存穿透保护）。
+//
+// 布隆只增不删，容量按业务 key 总量预估：实际插入量超过 ExpectedKeys 时
+// 假阳性率上升（穿透保护变弱），但不会产生假阴性，不影响数据正确性。
+// 默认 100 万 key / 1% 假阳性约占用 1.2 MB 内存。
+type BloomCacheConfig struct {
+	ExpectedKeys      uint64  `json:",default=1000000"`
+	FalsePositiveRate float64 `json:",default=0.01"`
 }
 
 type L1CacheConfig struct {

@@ -129,6 +129,12 @@ Rpc:
       Addresses:
         - "127.0.0.1:6379"
       PoolSize: 200
+    # 布隆过滤器（缓存穿透保护）。只增不删，按业务 key 总量预估容量。
+    # 实际插入量超过 ExpectedKeys 只会抬高假阳性率（穿透保护变弱），
+    # 不会产生假阴性，不影响数据正确性。默认约占用 1.2 MB。
+    Bloom:
+      ExpectedKeys: 1000000
+      FalsePositiveRate: 0.01
 
   # ---------- 消息队列 ----------
   MQ:

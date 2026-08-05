@@ -10,7 +10,6 @@ func TestNew_CodeMsgRoundTrip(t *testing.T) {
 		code int
 		msg  string
 	}{
-		{CodeSuccess, "success"},
 		{CodeInvalidParam, "参数校验失败"},
 		{CodeTokenExpired, "Token 已过期"},
 		{CodePointsInsufficient, "积分不足"},
@@ -91,5 +90,48 @@ func TestErrorMessages_AllCodesHaveMessage(t *testing.T) {
 	// CodeUnknownError 的消息本就是 "未知错误"，单独验证其映射存在且正确。
 	if Message(CodeUnknownError) != "未知错误" {
 		t.Errorf("Message(CodeUnknownError) = %q, want 未知错误", Message(CodeUnknownError))
+	}
+}
+
+// TestNewNeverReturnsNil 回归测试：错误构造函数恒不返回 nil。
+//
+// 背景：CodeSuccess = 0 与 gRPC codes.OK 数值相同，status.Error(codes.OK, ...)
+// 按规范返回 nil。若不做兜底，New(CodeSuccess) 会构造出"消失的错误"，
+// 导致调用方 if err != nil 被静默跳过。现统一降级为 CodeUnknownError。
+//
+// 注意：TestNew_CodeMsgRoundTrip 原本包含 {CodeSuccess, "success"} 用例，
+// 它当时"通过"正是因为 New 返回 nil 且 Code(nil)==CodeSuccess 恰好相等，
+// 掩盖了该缺陷。该用例已移出，语义由本测试正确覆盖。
+func TestNewNeverReturnsNil(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"New(CodeSuccess)", New(CodeSuccess)},
+		{"New(CodeSuccess, msg)", New(CodeSuccess, "boom")},
+		{"Newf(CodeSuccess)", Newf(CodeSuccess, "boom %d", 1)},
+		{"NewErr(CodeSuccess)", NewErr(CodeSuccess, errors.New("cause"))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.err == nil {
+				t.Fatalf("%s returned nil, expected a non-nil error", tc.name)
+			}
+			if got := Code(tc.err); got != CodeUnknownError {
+				t.Errorf("Code() = %d, want CodeUnknownError(%d)", got, CodeUnknownError)
+			}
+		})
+	}
+}
+
+// TestNewErrHidesCause NewErr 不得把底层错误细节透传给客户端。
+func TestNewErrHidesCause(t *testing.T) {
+	cause := errors.New("SELECT * FROM users WHERE secret='leak'")
+	err := NewErr(CodeDBError, cause)
+	if Code(err) != CodeDBError {
+		t.Errorf("Code = %d, want %d", Code(err), CodeDBError)
+	}
+	if msg := Msg(err); msg != Message(CodeDBError) {
+		t.Errorf("Msg() = %q, expected standard message %q (cause must not leak)", msg, Message(CodeDBError))
 	}
 }

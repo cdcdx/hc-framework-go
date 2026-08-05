@@ -8,9 +8,9 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/bcrypt"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
-	"gorm.io/gorm"
 )
 
 // ChangePasswordLogic 修改密码（校验旧密码，标记改密时间使已签发 token 失效）
@@ -38,7 +38,7 @@ func (l *ChangePasswordLogic) ChangePassword(in *hc.ChangePasswordRequest) (*hc.
 
 	var u model.User
 	err := l.svcCtx.Db.Where("user_id = ?", in.UserId).First(&u).Error
-	if err == gorm.ErrRecordNotFound {
+	if gormx.IsRecordNotFound(err) {
 		return nil, errorx.New(errorx.CodeNotFound, "user not found")
 	}
 	if err != nil {

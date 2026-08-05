@@ -7,9 +7,9 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/bcrypt"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
-	"gorm.io/gorm"
 )
 
 // LoginLogic 邮箱密码登录
@@ -34,7 +34,7 @@ func (l *LoginLogic) Login(in *hc.LoginRequest) (*hc.LoginResponse, error) {
 
 	var u model.User
 	err := l.svcCtx.Db.Where("email = ?", in.Email).First(&u).Error
-	if err == gorm.ErrRecordNotFound {
+	if gormx.IsRecordNotFound(err) {
 		// 不泄露用户是否存在，统一报密码错误
 		return nil, errorx.New(errorx.CodePasswordWrong)
 	}

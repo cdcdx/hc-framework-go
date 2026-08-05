@@ -6,9 +6,9 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
-	"gorm.io/gorm"
 )
 
 // OrderDetailLogic 订单详情（校验归属）
@@ -29,7 +29,7 @@ func NewOrderDetailLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Order
 func (l *OrderDetailLogic) OrderDetail(in *hc.ShopOrderDetailRequest) (*hc.OrderInfo, error) {
 	var order model.RedeemOrder
 	err := l.svcCtx.Db.Where("id = ?", in.OrderId).First(&order).Error
-	if err == gorm.ErrRecordNotFound {
+	if gormx.IsRecordNotFound(err) {
 		return nil, errorx.New(errorx.CodeNotFound, "order not found")
 	}
 	if err != nil {

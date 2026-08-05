@@ -101,8 +101,9 @@ const (
 	CodeThirdPartyError                // 10704
 )
 
-// ErrorMessages 错误码 → 消息映射
-var ErrorMessages = map[int]string{
+// errorMessages 错误码 → 消息映射。
+// 私有以避免外部包在运行时随意篡改全局错误码映射（非线程安全）。
+var errorMessages = map[int]string{
 	CodeSuccess:              "success",
 	CodeInvalidParam:         "参数校验失败",
 	CodeNotFound:             "资源不存在",
@@ -149,15 +150,31 @@ var ErrorMessages = map[int]string{
 
 // Message 获取错误码对应的消息
 func Message(code int) string {
-	if msg, ok := ErrorMessages[code]; ok {
+	if msg, ok := errorMessages[code]; ok {
 		return msg
 	}
 	return "未知错误"
 }
 
+// normalizeCode 保证错误码不会落到 gRPC 的 OK(0)。
+//
+// 业务码体系中 CodeSuccess = 0，与 codes.OK 数值相同，而 status.Error(codes.OK, ...)
+// 按 gRPC 规范返回 nil —— 这会让 New(CodeSuccess) 构造出的"错误"凭空消失，
+// 调用方的 if err != nil 判断被静默跳过。此处统一兜底为 CodeUnknownError。
+func normalizeCode(code int) int {
+	if code == CodeSuccess {
+		logx.WithContext(context.Background()).Errorf(
+			"errorx: refusing to build error with CodeSuccess(0), fallback to CodeUnknownError(%d)", CodeUnknownError)
+		return CodeUnknownError
+	}
+	return code
+}
+
 // New 创建带业务错误码的 error；msg 为空时回退到错误码默认消息。
 // 该错误经 zrpc 传输后，网关用 Code()/Msg() 还原。
+// 传入 CodeSuccess 时自动降级为 CodeUnknownError，保证返回值恒不为 nil。
 func New(code int, msg ...string) error {
+	code = normalizeCode(code)
 	m := ""
 	if len(msg) > 0 {
 		m = msg[0]
@@ -170,7 +187,7 @@ func New(code int, msg ...string) error {
 
 // Newf 同 New，支持格式化消息。
 func Newf(code int, format string, args ...any) error {
-	return status.Error(codes.Code(code), fmt.Sprintf(format, args...))
+	return status.Error(codes.Code(normalizeCode(code)), fmt.Sprintf(format, args...))
 }
 
 // NewErr 创建业务错误并记录底层 cause 到日志。
@@ -178,6 +195,7 @@ func Newf(code int, format string, args ...any) error {
 // 表名、第三方堆栈等）透传给客户端，仅返回该错误码对应的标准消息，
 // 详细错误经 logx 留存便于排查。适用于包裹数据库/第三方调用错误。
 func NewErr(code int, cause error) error {
+	code = normalizeCode(code)
 	if cause != nil {
 		logx.WithContext(context.Background()).Errorf("errorx: code=%d msg=%q cause=%v", code, Message(code), cause)
 	}

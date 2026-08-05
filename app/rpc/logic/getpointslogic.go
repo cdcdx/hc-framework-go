@@ -6,9 +6,9 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
-	"gorm.io/gorm"
 )
 
 // GetPointsLogic 查询积分余额
@@ -29,7 +29,7 @@ func NewGetPointsLogic(ctx context.Context, svcCtx *svc.ServiceContext) *GetPoin
 func (l *GetPointsLogic) GetPoints(in *hc.GetPointsRequest) (*hc.GetPointsResponse, error) {
 	var u model.User
 	err := l.svcCtx.Db.Where("user_id = ?", in.UserId).First(&u).Error
-	if err == gorm.ErrRecordNotFound {
+	if gormx.IsRecordNotFound(err) {
 		return nil, errorx.New(errorx.CodeNotFound, "user not found")
 	}
 	if err != nil {

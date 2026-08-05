@@ -3,20 +3,21 @@
 //
 // 使用方式:
 //
-//	factory := dbclient.NewFactory(cfg.Databases)
+//	factory := dbclient.NewFactory(cfg.Databases.ToSpecs())
 //	sqlDB := factory.SQL("business")           // *gorm.DB
 //	noSQL := factory.NoSQL("log")               // NoSQLClient (mongodb/clickhouse/es)
 //	mongo := factory.MongoDB("user")            // *mongo.Client (快捷方法)
 //	es := factory.Elasticsearch("log")          // *elasticsearch.Client (快捷方法)
 //	factory.Close()                              // 关闭所有连接
+//
+// 分层约定: 本包属于 common 层，只依赖 common/gormx 与自有的 DBSpec 契约，
+// 不 import 任何 app 层包。上层配置通过 ToSpecs() 适配为 Specs 后传入。
 package dbclient
 
 import (
 	"fmt"
 	"sync"
-	"time"
 
-	"github.com/cdcdx/hc-framework-go/app/rpc/config"
 	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"gorm.io/gorm"
 )
@@ -25,7 +26,7 @@ import (
 // SQL 类（sqlite/mysql/postgres）走 gorm 连接；NoSQL 类按需延迟创建。
 type Factory struct {
 	mu      sync.Mutex
-	configs config.Databases
+	configs Specs
 
 	// SQL 数据库实例
 	sqlDBs map[string]*gorm.DB
@@ -45,9 +46,9 @@ type NoSQLClient interface {
 	Close() error
 }
 
-// NewFactory 根据多库配置创建客户端工厂。
+// NewFactory 根据多库连接规格创建客户端工厂。
 // 只初始化 SQL 类数据库（sqlite/mysql/postgres），NoSQL 类按需延迟创建。
-func NewFactory(cfgs config.Databases) *Factory {
+func NewFactory(cfgs Specs) *Factory {
 	f := &Factory{
 		configs:      cfgs,
 		sqlDBs:       make(map[string]*gorm.DB),
@@ -76,22 +77,19 @@ func (f *Factory) sqlLocked(name string) (*gorm.DB, error) {
 	if !cfg.IsSQL() {
 		return nil, fmt.Errorf("db %s is not a SQL database (driver=%s)", name, cfg.Driver)
 	}
-
-	driver, dsn, err := cfg.ResolveDSN()
-	if err != nil {
-		return nil, fmt.Errorf("resolve db %s: %w", name, err)
+	if cfg.DSN == "" {
+		return nil, fmt.Errorf("db %s: empty DSN", name)
 	}
 
 	label := cfg.PoolLabel
 	if label == "" {
 		label = name
 	}
-	maxOpen, maxIdle, connMax := f.resolvePoolParams(cfg, driver)
 
-	db, err := gormx.OpenWithPool(driver, dsn, gormx.PoolConfig{
-		MaxOpenConns:    maxOpen,
-		MaxIdleConns:    maxIdle,
-		ConnMaxLifetime: connMax,
+	db, err := gormx.OpenWithPool(cfg.Driver, cfg.DSN, gormx.PoolConfig{
+		MaxOpenConns:    cfg.MaxOpenConns,
+		MaxIdleConns:    cfg.MaxIdleConns,
+		ConnMaxLifetime: cfg.ConnMaxLifetime,
 		Label:           label,
 	})
 	if err != nil {
@@ -120,7 +118,7 @@ func (f *Factory) NoSQL(name string) (NoSQLClient, error) {
 		return nil, fmt.Errorf("db %s is a SQL database (driver=%s), use SQL() instead", name, cfg.Driver)
 	}
 
-	driver, _, _ := cfg.ResolveDSN()
+	driver := cfg.Driver
 
 	// NoSQL 适配器尚未实现，统一返回未实现错误。
 	// 各分支预留接入点：mongodb/clickhouse/elasticsearch。
@@ -211,30 +209,4 @@ func (f *Factory) Close() error {
 		}
 	}
 	return nil
-}
-
-func (f *Factory) resolvePoolParams(cfg config.DBConfig, driver string) (maxOpen, maxIdle int, connMax time.Duration) {
-	maxOpen = cfg.MaxOpenConns
-	maxIdle = cfg.MaxIdleConns
-	connMax = cfg.ConnMaxLifetime
-
-	switch driver {
-	case "mysql":
-		if cfg.Mysql.MaxOpenConns > 0 {
-			maxOpen = cfg.Mysql.MaxOpenConns
-			maxIdle = cfg.Mysql.MaxIdleConns
-		}
-		if cfg.Mysql.ConnMaxLifetime > 0 {
-			connMax = cfg.Mysql.ConnMaxLifetime
-		}
-	case "postgres":
-		if cfg.Postgres.MaxOpenConns > 0 {
-			maxOpen = cfg.Postgres.MaxOpenConns
-			maxIdle = cfg.Postgres.MaxIdleConns
-		}
-		if cfg.Postgres.ConnMaxLifetime > 0 {
-			connMax = cfg.Postgres.ConnMaxLifetime
-		}
-	}
-	return
 }

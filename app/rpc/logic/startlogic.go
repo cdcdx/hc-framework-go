@@ -7,9 +7,9 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
-	"gorm.io/gorm"
 )
 
 // StartLogic 开始挂机
@@ -40,7 +40,7 @@ func (l *StartLogic) Start(in *hc.IdleStartRequest) (*hc.IdleRecord, error) {
 	if err == nil {
 		return toIdleRecord(&existing), nil
 	}
-	if err != gorm.ErrRecordNotFound {
+	if !gormx.IsRecordNotFound(err) {
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 

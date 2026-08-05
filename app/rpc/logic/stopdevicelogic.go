@@ -7,9 +7,9 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
-	"gorm.io/gorm"
 )
 
 // StopDeviceLogic 停止指定设备挂机并结算
@@ -36,7 +36,7 @@ func (l *StopDeviceLogic) StopDevice(in *hc.IdleStopDeviceRequest) (*hc.IdleReco
 	err := l.svcCtx.Db.
 		Where("user_id = ? AND device_id = ? AND status = ?", in.UserId, in.DeviceId, model.IdleStatusActive).
 		First(&rec).Error
-	if err == gorm.ErrRecordNotFound {
+	if gormx.IsRecordNotFound(err) {
 		return nil, errorx.New(errorx.CodeNotIdle)
 	}
 	if err != nil {

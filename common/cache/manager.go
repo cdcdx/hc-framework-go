@@ -29,11 +29,27 @@ type Manager struct {
 	config Config
 }
 
+// defaultBloomExpectedKeys 布隆过滤器默认预期容量。
+// 约占用 m = -n*ln(0.01)/(ln2)^2 ≈ 9.6 bit/key → 100 万 key 约 1.2 MB。
+const defaultBloomExpectedKeys = 1_000_000
+
 // Config 缓存配置
 type Config struct {
 	Enabled bool
 	L1      L1Config
 	L2      L2Config
+	Bloom   BloomConfig
+}
+
+// BloomConfig 布隆过滤器配置。
+// 布隆用于缓存穿透保护，只增不删，因此容量需按业务 key 总量预估：
+// 实际插入量远超 ExpectedKeys 时假阳性率上升（穿透保护变弱），但**不会**
+// 产生假阴性，故不影响数据正确性。
+type BloomConfig struct {
+	// ExpectedKeys 预期 key 总量，0 表示使用默认值 100 万。
+	ExpectedKeys uint64
+	// FalsePositiveRate 目标假阳性率，0 或越界时取 0.01。
+	FalsePositiveRate float64
 }
 
 // L1Config 本地缓存配置
@@ -95,8 +111,13 @@ func New(config Config) *Manager {
 		m.l2 = nil
 	}
 
-	// 布隆过滤器：保护缓存穿透
-	m.bloom = newRistrettoBloom(config.L1)
+	// 布隆过滤器：保护缓存穿透。
+	// 必须使用不淘汰的位数组实现，保证零假阴性（见 bloom.go 注释）。
+	expected := config.Bloom.ExpectedKeys
+	if expected == 0 {
+		expected = defaultBloomExpectedKeys
+	}
+	m.bloom = newBitsetBloom(expected, config.Bloom.FalsePositiveRate)
 
 	return m
 }

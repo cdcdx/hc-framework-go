@@ -7,9 +7,9 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
-	"gorm.io/gorm"
 )
 
 // ReportProgressLogic 上报任务进度（累加并自动判定完成）
@@ -34,7 +34,7 @@ func (l *ReportProgressLogic) ReportProgress(in *hc.ReportProgressRequest) (*hc.
 
 	var define model.Task
 	err := l.svcCtx.Db.Where("task_key = ?", in.TaskKey).First(&define).Error
-	if err == gorm.ErrRecordNotFound {
+	if gormx.IsRecordNotFound(err) {
 		return nil, errorx.New(errorx.CodeNotFound, "task not found")
 	}
 	if err != nil {
@@ -44,7 +44,7 @@ func (l *ReportProgressLogic) ReportProgress(in *hc.ReportProgressRequest) (*hc.
 	var pro model.UserTaskProgress
 	period := periodOf(&define, time.Now())
 	err = l.svcCtx.Db.Where("user_id = ? AND task_id = ?", in.UserId, define.ID).First(&pro).Error
-	if err == gorm.ErrRecordNotFound {
+	if gormx.IsRecordNotFound(err) {
 		pro = model.UserTaskProgress{
 			UserID: in.UserId,
 			TaskID: define.ID,

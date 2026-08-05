@@ -2,15 +2,16 @@ package dbclient
 
 import (
 	"testing"
-
-	"github.com/cdcdx/hc-framework-go/app/rpc/config"
 )
 
+// 注意：本包属于 common 层，测试只使用自有的 Specs 契约，
+// 不得 import app/rpc/config（会形成 import cycle）。
+// 配置层到 Specs 的适配逻辑由 app/rpc/config 的测试覆盖。
+
 func TestFactory_SQL_Sqlite(t *testing.T) {
-	cfgs := config.Databases{
-		"business": {Driver: "sqlite", Dsn: "file::memory:?cache=shared", PoolLabel: "biz"},
-	}
-	f := NewFactory(cfgs)
+	f := NewFactory(Specs{
+		"business": {Driver: "sqlite", DSN: "file::memory:?cache=shared", PoolLabel: "biz"},
+	})
 	defer f.Close()
 
 	db, err := f.SQL("business")
@@ -31,42 +32,42 @@ func TestFactory_SQL_Sqlite(t *testing.T) {
 }
 
 func TestFactory_SQL_NotConfigured(t *testing.T) {
-	f := NewFactory(config.Databases{})
+	f := NewFactory(Specs{})
 	defer f.Close()
 
-	_, err := f.SQL("missing")
-	if err == nil {
+	if _, err := f.SQL("missing"); err == nil {
 		t.Fatal("expected error for missing db")
 	}
 }
 
-func TestFactory_SQL_NotSQL(t *testing.T) {
-	cfgs := config.Databases{
-		"log": {Driver: "elasticsearch", Elasticsearch: config.ESConfig{Addresses: []string{"http://127.0.0.1:9200"}}},
-	}
-	f := NewFactory(cfgs)
+func TestFactory_SQL_EmptyDSN(t *testing.T) {
+	// 上层 ToSpecs 解析失败时会写入只有 Driver 的 spec，此处应给出明确错误
+	f := NewFactory(Specs{"business": {Driver: "sqlite"}})
 	defer f.Close()
 
-	_, err := f.SQL("log")
-	if err == nil {
+	if _, err := f.SQL("business"); err == nil {
+		t.Fatal("expected error for empty DSN")
+	}
+}
+
+func TestFactory_SQL_NotSQL(t *testing.T) {
+	f := NewFactory(Specs{
+		"log": {Driver: "elasticsearch", DSN: "http://127.0.0.1:9200"},
+	})
+	defer f.Close()
+
+	if _, err := f.SQL("log"); err == nil {
 		t.Fatal("expected error for NoSQL db via SQL()")
 	}
 }
 
 func TestFactory_NoSQL_NotImplemented(t *testing.T) {
-	tests := []struct{ name, driver string }{
-		{"mongodb", "mongodb"},
-		{"clickhouse", "clickhouse"},
-		{"elasticsearch", "elasticsearch"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := config.Databases{"nosql": {Driver: tc.driver, Dsn: "test://localhost"}}
-			f := NewFactory(cfg)
+	for _, driver := range []string{"mongodb", "clickhouse", "elasticsearch"} {
+		t.Run(driver, func(t *testing.T) {
+			f := NewFactory(Specs{"nosql": {Driver: driver, DSN: "test://localhost"}})
 			defer f.Close()
 
-			_, err := f.NoSQL("nosql")
-			if err == nil {
+			if _, err := f.NoSQL("nosql"); err == nil {
 				t.Fatal("expected 'not yet implemented' error")
 			}
 		})
@@ -74,23 +75,20 @@ func TestFactory_NoSQL_NotImplemented(t *testing.T) {
 }
 
 func TestFactory_NoSQL_IsSQL(t *testing.T) {
-	cfgs := config.Databases{
-		"business": {Driver: "sqlite", Dsn: "file::memory:"},
-	}
-	f := NewFactory(cfgs)
+	f := NewFactory(Specs{
+		"business": {Driver: "sqlite", DSN: "file::memory:"},
+	})
 	defer f.Close()
 
-	_, err := f.NoSQL("business")
-	if err == nil {
+	if _, err := f.NoSQL("business"); err == nil {
 		t.Fatal("expected error when calling NoSQL() on SQL db")
 	}
 }
 
 func TestFactory_ListSQL(t *testing.T) {
-	cfgs := config.Databases{
-		"business": {Driver: "sqlite", Dsn: "file::memory:"},
-	}
-	f := NewFactory(cfgs)
+	f := NewFactory(Specs{
+		"business": {Driver: "sqlite", DSN: "file::memory:"},
+	})
 	defer f.Close()
 
 	_, _ = f.SQL("business")
@@ -101,10 +99,9 @@ func TestFactory_ListSQL(t *testing.T) {
 }
 
 func TestFactory_Health(t *testing.T) {
-	cfgs := config.Databases{
-		"business": {Driver: "sqlite", Dsn: "file::memory:"},
-	}
-	f := NewFactory(cfgs)
+	f := NewFactory(Specs{
+		"business": {Driver: "sqlite", DSN: "file::memory:"},
+	})
 	defer f.Close()
 
 	_, _ = f.SQL("business")
@@ -114,23 +111,33 @@ func TestFactory_Health(t *testing.T) {
 }
 
 func TestFactory_SQLOrDefault(t *testing.T) {
-	f := NewFactory(config.Databases{})
+	f := NewFactory(Specs{})
 	defer f.Close()
 
-	result := f.SQLOrDefault("missing", nil)
-	if result != nil {
+	if result := f.SQLOrDefault("missing", nil); result != nil {
 		t.Fatal("SQLOrDefault should return nil when default is nil")
 	}
 
-	// 用 sqlite memory 做默认
-	cfgs := config.Databases{
-		"real": {Driver: "sqlite", Dsn: "file::memory:"},
-	}
-	f2 := NewFactory(cfgs)
+	f2 := NewFactory(Specs{
+		"real": {Driver: "sqlite", DSN: "file::memory:"},
+	})
 	defer f2.Close()
 	realDB, _ := f2.SQL("real")
-	fallback := f2.SQLOrDefault("missing", realDB)
-	if fallback != realDB {
+	if fallback := f2.SQLOrDefault("missing", realDB); fallback != realDB {
 		t.Fatal("SQLOrDefault should return defaultDB")
+	}
+}
+
+func TestDBSpec_IsSQL(t *testing.T) {
+	sqlDrivers := []string{"sqlite", "mysql", "postgres", "postgresql"}
+	for _, d := range sqlDrivers {
+		if !(DBSpec{Driver: d}).IsSQL() {
+			t.Errorf("driver %q should be SQL", d)
+		}
+	}
+	for _, d := range []string{"mongodb", "clickhouse", "elasticsearch", ""} {
+		if (DBSpec{Driver: d}).IsSQL() {
+			t.Errorf("driver %q should not be SQL", d)
+		}
 	}
 }

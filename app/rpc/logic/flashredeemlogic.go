@@ -8,6 +8,7 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/metrics"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
@@ -48,7 +49,7 @@ func (l *FlashRedeemLogic) FlashRedeem(in *hc.FlashRedeemRequest) (*hc.RedeemRes
 
 	var act model.ShopFlashActivity
 	err := l.svcCtx.Db.WithContext(ctx).Where("id = ?", in.ActivityId).First(&act).Error
-	if err == gorm.ErrRecordNotFound {
+	if gormx.IsRecordNotFound(err) {
 		return nil, errorx.New(errorx.CodeNotFound, "flash sale activity not found")
 	}
 	if err != nil {

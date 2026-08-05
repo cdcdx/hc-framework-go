@@ -7,9 +7,9 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
-	"gorm.io/gorm"
 )
 
 // RefreshTokenLogic 刷新 Token
@@ -43,7 +43,7 @@ func (l *RefreshTokenLogic) RefreshToken(in *hc.RefreshTokenRequest) (*hc.Refres
 
 	var u model.User
 	err = l.svcCtx.Db.Where("user_id = ?", claims.UserID).First(&u).Error
-	if err == gorm.ErrRecordNotFound {
+	if gormx.IsRecordNotFound(err) {
 		return nil, errorx.New(errorx.CodeTokenInvalid)
 	}
 	if err != nil {

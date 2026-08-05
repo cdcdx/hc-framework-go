@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
 	"gorm.io/gorm"
@@ -101,7 +102,7 @@ func accumulateDaily(ctx context.Context, svcCtx *ServiceContext, userID, day st
 		}
 		return nil
 	}
-	if err != gorm.ErrRecordNotFound {
+	if !gormx.IsRecordNotFound(err) {
 		return errorx.New(errorx.CodeDBError, err.Error())
 	}
 	if points > limit {

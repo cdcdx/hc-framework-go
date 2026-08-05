@@ -56,7 +56,8 @@ func NewServiceContext(c config.Config) *ServiceContext {
 
 	if len(c.Databases) > 0 {
 		// 多库模式：通过 Factory 统一管理所有 SQL/NoSQL 客户端
-		factory = dbclient.NewFactory(c.Databases)
+		// ToSpecs 完成 DSN 解析与连接池优先级适配，dbclient 不感知配置结构
+		factory = dbclient.NewFactory(c.Databases.ToSpecs())
 
 		// 主业务库
 		bizDB, err := factory.SQL("business")
@@ -126,6 +127,10 @@ func NewServiceContext(c config.Config) *ServiceContext {
 			Password:  c.Cache.L2.Password,
 			DB:        c.Cache.L2.DB,
 			PoolSize:  c.Cache.L2.PoolSize,
+		},
+		Bloom: cache.BloomConfig{
+			ExpectedKeys:      c.Cache.Bloom.ExpectedKeys,
+			FalsePositiveRate: c.Cache.Bloom.FalsePositiveRate,
 		},
 	})
 
