@@ -290,17 +290,20 @@ type Config struct {
 		RedirectURI  string
 	}
 
-	Idle struct {
-		MaxActiveDevices int
-		PointsPerMinute  int
-		DailyPointsLimit int64
-		TimeoutMinutes   int
-		ScanInterval     time.Duration
-	}
+	Idle IdleConfig
 
 	FlashSale struct {
 		Timeout time.Duration
 	}
+}
+
+// IdleConfig 挂机(idle)域配置
+type IdleConfig struct {
+	MaxActiveDevices int
+	PointsPerMinute  int
+	DailyPointsLimit int64
+	TimeoutMinutes   int
+	ScanInterval     time.Duration
 }
 
 // CacheConfig 缓存配置。

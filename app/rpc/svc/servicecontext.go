@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/cdcdx/hc-framework-go/app/rpc/config"
 	"github.com/cdcdx/hc-framework-go/common/cache"
@@ -39,6 +40,11 @@ type ServiceContext struct {
 
 	// MQConsumer 消息消费者。
 	MQConsumer mq.Consumer
+
+	// stop 用于优雅关闭后台 goroutine（如 idle scan）。
+	stop chan struct{}
+	// wg 跟踪后台 goroutine，Close 时等待其退出。
+	wg sync.WaitGroup
 }
 
 // NewServiceContext 装配 DB（含全部表结构与任务种子）、JWT、缓存、消息队列。
@@ -154,9 +160,11 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		Cache:      cacheMgr,
 		MQProducer: mqProducer,
 		MQConsumer: mqConsumer,
+		stop:       make(chan struct{}),
 	}
 
-	go startIdleScan(svcCtx)
+	svcCtx.wg.Add(1)
+	go startIdleScan(svcCtx, svcCtx.stop, &svcCtx.wg)
 
 	// 注册 MQ 默认消费端（业务域按需在各自 logic 中注册）
 	if c.MQ.Enabled && c.MQ.Type != "none" {
@@ -198,4 +206,27 @@ func (svc *ServiceContext) Publish(ctx context.Context, topic, key string, value
 		return nil
 	}
 	return svc.MQProducer.Send(ctx, topic, key, value)
+}
+
+// Close 优雅关闭所有外部资源：停止后台扫描 goroutine、关闭缓存(L2)、消息队列与数据库连接。
+// 应在进程退出时调用（如 main 中 defer svcCtx.Close()）。重复调用安全。
+func (svc *ServiceContext) Close() error {
+	if svc.stop != nil {
+		close(svc.stop)
+	}
+	svc.wg.Wait()
+
+	if svc.Cache != nil {
+		_ = svc.Cache.Close()
+	}
+	if svc.MQProducer != nil {
+		_ = svc.MQProducer.Close()
+	}
+	if svc.MQConsumer != nil {
+		_ = svc.MQConsumer.Close()
+	}
+	if svc.DBFactory != nil {
+		_ = svc.DBFactory.Close()
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package svc
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/cdcdx/hc-framework-go/common/metrics"
@@ -11,7 +12,10 @@ import (
 
 // startIdleScan 后台 goroutine，定期扫描超时未心跳的活跃挂机记录并结算。
 // 每 scanInterval 执行一次，结算 last_heartbeat_at < now-timeout 的记录。
-func startIdleScan(svcCtx *ServiceContext) {
+// stop 通道关闭或 ticker 触发时退出；退出前调用 wg.Done() 以便 ServiceContext.Close 等待。
+func startIdleScan(svcCtx *ServiceContext, stop <-chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	interval := svcCtx.Config.Idle.ScanInterval
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -27,8 +31,14 @@ func startIdleScan(svcCtx *ServiceContext) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		scanAndSettleTimeout(svcCtx, timeout)
+	for {
+		select {
+		case <-stop:
+			logx.Infof("[idle-scan] background scanner stopped")
+			return
+		case <-ticker.C:
+			scanAndSettleTimeout(svcCtx, timeout)
+		}
 	}
 }
 
@@ -41,6 +51,10 @@ func scanAndSettleTimeout(svcCtx *ServiceContext, timeout time.Duration) {
 
 	cutoff := time.Now().Add(-timeout)
 	ctx := context.Background()
+
+	if svcCtx.Db == nil {
+		return
+	}
 
 	var recs []model.IdleRecord
 	if err := svcCtx.Db.WithContext(ctx).

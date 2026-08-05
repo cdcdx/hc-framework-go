@@ -27,6 +27,7 @@ func main() {
 
 	// ---- Rpc 后端（同进程）----
 	rpcCtx := rpcsvc.NewServiceContext(c.Rpc)
+	defer rpcCtx.Close()
 	hcServer := server.NewHcServer(rpcCtx)
 	// 进程内客户端，供 Gateway 直接调用，无需 gRPC 网络连接。
 	localHc := server.NewLocalHcClient(hcServer)
