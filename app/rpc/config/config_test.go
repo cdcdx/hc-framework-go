@@ -96,6 +96,21 @@ func TestResolvePoolVendorPriority(t *testing.T) {
 	if maxOpen3, _, _ := cfg3.resolvePool("sqlite"); maxOpen3 != 5 {
 		t.Errorf("sqlite 应取顶层值, got %d", maxOpen3)
 	}
+
+	// vendor 段各字段独立覆盖：MaxOpenConns>0 不应连带覆盖 MaxIdleConns。
+	cfg4 := DBConfig{
+		Driver:       "mysql",
+		MaxOpenConns: 50,
+		MaxIdleConns: 10,
+		Mysql:        DBVendorConfig{Master: "dsn", MaxOpenConns: 200}, // 仅覆盖 open
+	}
+	maxOpen4, maxIdle4, _ := cfg4.resolvePool("mysql")
+	if maxOpen4 != 200 {
+		t.Errorf("vendor MaxOpenConns 应覆盖顶层: got %d", maxOpen4)
+	}
+	if maxIdle4 != 10 {
+		t.Errorf("vendor 未设 MaxIdleConns 时应保留顶层值: got %d", maxIdle4)
+	}
 }
 
 // TestToSpecs 验证 config → dbclient 的适配：DSN 解析与连接池优先级

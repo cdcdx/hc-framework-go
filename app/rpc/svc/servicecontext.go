@@ -65,31 +65,27 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		// ToSpecs 完成 DSN 解析与连接池优先级适配，dbclient 不感知配置结构
 		factory = dbclient.NewFactory(c.Databases.ToSpecs())
 
-		// 主业务库
+		// 主业务库（必配）
 		bizDB, err := factory.SQL("business")
 		if err != nil {
 			logx.Must(fmt.Errorf("open business db: %w", err))
 		}
 		db = bizDB
 
-		// 预初始化其他 SQL 库（可选，失败不阻塞启动）
-		for _, name := range []string{"user", "monitor", "log"} {
-			if _, ok := c.Databases[name]; ok {
-				if cfg := c.Databases[name]; cfg.IsSQL() {
-					if _, err := factory.SQL(name); err != nil {
-						logx.Errorf("[db] init %s db failed (non-fatal): %v", name, err)
-					}
-				}
-			}
-		}
+		// user / monitor / log 按需延迟加载（factory.SQL() 自身支持线程安全的单次初始化）。
+		// 各域 logic 首次访问时自动创建连接，无需在此预初始化。
 	} else {
 		// 单库模式（向后兼容）
+		poolLabel := c.DB.PoolLabel
+		if poolLabel == "" {
+			poolLabel = "default"
+		}
 		var err error
 		db, err = gormx.OpenWithPool(c.DB.Driver, c.DB.Dsn, gormx.PoolConfig{
 			MaxOpenConns:    c.DB.MaxOpenConns,
 			MaxIdleConns:    c.DB.MaxIdleConns,
 			ConnMaxLifetime: c.DB.ConnMaxLifetime,
-			Label:           c.DB.PoolLabel,
+			Label:           poolLabel,
 		})
 		if err != nil {
 			logx.Must(err)
@@ -117,40 +113,21 @@ func NewServiceContext(c config.Config) *ServiceContext {
 	}
 
 	// ---- 缓存 ----
+	// MaxMemoryMB 到 MaxCost 的自动换算：仅当 MaxCost 未显式配置时使用。
+	l1Cfg := c.Cache.L1.ToCacheL1()
+	if l1Cfg.MaxCost == 0 && l1Cfg.MaxMemoryMB > 0 {
+		l1Cfg.MaxCost = int64(l1Cfg.MaxMemoryMB) << 20
+	}
 	cacheMgr := cache.New(cache.Config{
 		Enabled: c.Cache.Enabled,
-		L1: cache.L1Config{
-			Enabled:     c.Cache.L1.Enabled,
-			MaxMemoryMB: c.Cache.L1.MaxMemoryMB,
-			DefaultTTL:  c.Cache.L1.DefaultTTL,
-			NumCounters: c.Cache.L1.NumCounters,
-			MaxCost:     c.Cache.L1.MaxCost,
-		},
-		L2: cache.L2Config{
-			Enabled:   c.Cache.L2.Enabled,
-			Type:      c.Cache.L2.Type,
-			Addresses: c.Cache.L2.Addresses,
-			Password:  c.Cache.L2.Password,
-			DB:        c.Cache.L2.DB,
-			PoolSize:  c.Cache.L2.PoolSize,
-		},
-		Bloom: cache.BloomConfig{
-			ExpectedKeys:      c.Cache.Bloom.ExpectedKeys,
-			FalsePositiveRate: c.Cache.Bloom.FalsePositiveRate,
-		},
+		L1:      l1Cfg,
+		L2:      c.Cache.L2.ToCacheL2(),
+		Bloom:   c.Cache.Bloom.ToCacheBloom(),
 	})
 
 	// ---- 消息队列 ----
-	mqProducer := mq.NewProducer(mq.Config{
-		Enabled:    c.MQ.Enabled,
-		Type:       c.MQ.Type,
-		BufferSize: 1024,
-	})
-	mqConsumer := mq.NewConsumer(mq.Config{
-		Enabled:    c.MQ.Enabled,
-		Type:       c.MQ.Type,
-		BufferSize: 1024,
-	})
+	mqProducer := mq.NewProducer(c.MQ.ToMQConfig())
+	mqConsumer := mq.NewConsumer(c.MQ.ToMQConfig())
 
 	svcCtx := &ServiceContext{
 		Config:     c,
@@ -166,21 +143,18 @@ func NewServiceContext(c config.Config) *ServiceContext {
 	svcCtx.wg.Add(1)
 	go startIdleScan(svcCtx, svcCtx.stop, &svcCtx.wg)
 
-	// 注册 MQ 默认消费端（业务域按需在各自 logic 中注册）
-	if c.MQ.Enabled && c.MQ.Type != "none" {
-		// 示例：订单事件消费（实际业务在对应 logic 中注册 handler）
-		_ = svcCtx.MQConsumer.Subscribe(context.Background(), "hc.orders", func(ctx context.Context, msg *mq.Message) error {
-			return nil // 待各域 logic 注册实际 handler
-		})
-	}
+	// MQ 消费端由各域 logic 按需注册。
+	// 示例：svcCtx.MQConsumer.Subscribe(ctx, "hc.orders", orderHandler)
 
 	return svcCtx
 }
 
 // CachedGet 从两级缓存获取值；miss 时调用 loader 回源并自动回填缓存。
+// 回填 TTL 使用 L1 的 DefaultTTL（传入 0 的语义）。
+//
 // 示例用法:
 //
-//	val, err := svcCtx.CachedGet(ctx, "user:profile:"+uid, 5*time.Minute, func(ctx context.Context) ([]byte, error) {
+//	val, err := svcCtx.CachedGet(ctx, "user:profile:"+uid, func(ctx context.Context) ([]byte, error) {
 //	    user, err := svcCtx.GetUserProfile(ctx, uid)
 //	    return json.Marshal(user), err
 //	})

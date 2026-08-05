@@ -44,7 +44,7 @@ func getBroker(bufSize int) *memoryBroker {
 }
 
 func newMemoryProducer(cfg Config) *memoryProducer {
-	return &memoryProducer{broker: getBroker(cfg.BufferSize)}
+	return &memoryProducer{broker: getBroker(cfg.Memory.BufferSize)}
 }
 
 func (p *memoryProducer) Send(ctx context.Context, topic, key string, value []byte) error {
@@ -70,7 +70,7 @@ func (p *memoryProducer) SendAsync(ctx context.Context, topic, key string, value
 func (p *memoryProducer) Close() error { return nil }
 
 func newMemoryConsumer(cfg Config) *memoryConsumer {
-	b := getBroker(cfg.BufferSize)
+	b := getBroker(cfg.Memory.BufferSize)
 	return &memoryConsumer{broker: b, done: make(chan struct{})}
 }
 

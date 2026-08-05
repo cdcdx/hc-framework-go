@@ -13,9 +13,29 @@ type kafkaProducer struct {
 }
 
 func newKafkaProducer(cfg Config) *kafkaProducer {
+	kc := cfg.Kafka
+	brokers := kc.Brokers
+	if len(brokers) == 0 {
+		brokers = []string{"127.0.0.1:9092"}
+	}
+	acks := kc.RequiredAcks
+	if acks < -1 || acks > 1 {
+		acks = 1
+	}
+	batchSize := kc.BatchSize
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	batchBytes := kc.BatchBytes
+	if batchBytes <= 0 {
+		batchBytes = 1_048_576
+	}
 	w := &kafka.Writer{
-		Addr:     kafka.TCP(cfg.Brokers...),
-		Balancer: &kafka.LeastBytes{},
+		Addr:         kafka.TCP(brokers...),
+		Balancer:     &kafka.LeastBytes{},
+		RequiredAcks: kafka.RequiredAcks(acks),
+		BatchSize:    batchSize,
+		BatchBytes:   int64(batchBytes),
 	}
 	return &kafkaProducer{writer: w}
 }
@@ -52,13 +72,18 @@ type kafkaConsumer struct {
 }
 
 func newKafkaConsumer(cfg Config) *kafkaConsumer {
-	group := cfg.ConsumerGroup
+	kc := cfg.Kafka
+	brokers := kc.Brokers
+	if len(brokers) == 0 {
+		brokers = []string{"127.0.0.1:9092"}
+	}
+	group := kc.ConsumerGroup
 	if group == "" {
 		group = "hc-framework"
 	}
 	return &kafkaConsumer{
 		reader: kafka.NewReader(kafka.ReaderConfig{
-			Brokers: cfg.Brokers,
+			Brokers: brokers,
 			GroupID: group,
 		}),
 		done: make(chan struct{}),
@@ -66,7 +91,9 @@ func newKafkaConsumer(cfg Config) *kafkaConsumer {
 }
 
 func (c *kafkaConsumer) Subscribe(ctx context.Context, topic string, handler Handler) error {
-	_ = c.reader.SetOffset(kafka.LastOffset)
+	if topic == "" {
+		return ErrTopicEmpty
+	}
 	go func() {
 		defer c.reader.Close()
 		for {
@@ -77,9 +104,12 @@ func (c *kafkaConsumer) Subscribe(ctx context.Context, topic string, handler Han
 				return
 			default:
 			}
-			msg, err := c.reader.ReadMessage(ctx)
+			msg, err := c.reader.FetchMessage(ctx)
 			if err != nil {
-				logx.WithContext(ctx).Errorf("[mq-kafka] read error: %v", err)
+				if err.Error() == "EOF" || err.Error() == "context canceled" {
+					return
+				}
+				logx.WithContext(ctx).Errorf("[mq-kafka] fetch error: %v", err)
 				continue
 			}
 			if err := handler(ctx, &Message{
@@ -89,6 +119,9 @@ func (c *kafkaConsumer) Subscribe(ctx context.Context, topic string, handler Han
 				Offset:    msg.Offset,
 			}); err != nil {
 				logx.WithContext(ctx).Errorf("[mq-kafka] handler error topic=%s: %v", topic, err)
+			}
+			if err := c.reader.CommitMessages(ctx, msg); err != nil {
+				logx.WithContext(ctx).Errorf("[mq-kafka] commit error: %v", err)
 			}
 		}
 	}()

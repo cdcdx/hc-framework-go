@@ -8,7 +8,7 @@ import (
 )
 
 func TestMemoryQueue_ProducerConsumer(t *testing.T) {
-	cfg := Config{Enabled: true, Type: "memory", BufferSize: 64}
+	cfg := Config{Enabled: true, Type: "memory", Memory: MemoryConfig{BufferSize: 64}}
 	prod := NewProducer(cfg)
 	cons := NewConsumer(cfg)
 	defer prod.Close()
@@ -47,7 +47,7 @@ func TestMemoryQueue_ProducerConsumer(t *testing.T) {
 }
 
 func TestMemoryQueue_AsyncSend(t *testing.T) {
-	cfg := Config{Enabled: true, Type: "memory", BufferSize: 64}
+	cfg := Config{Enabled: true, Type: "memory", Memory: MemoryConfig{BufferSize: 64}}
 	prod := NewProducer(cfg)
 	cons := NewConsumer(cfg)
 	defer prod.Close()

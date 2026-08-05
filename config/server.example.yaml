@@ -4,10 +4,14 @@
 # 使用方式: cp config/server.example.yaml config/server.yaml
 #           然后按需修改即可启动。
 #
-# 多库说明: Databases 段支持 business / user / monitor / log 四个库。
-#           每个库通过 Driver 字段 + vendor 段（Mysql.Master / Postgres.Master）
-#           可在 sqlite/mysql/postgres 之间无缝切换。
-#           当前所有业务表共用 business 库；其余库为占位，待按域拆分后生效。
+# 多库约束（每库只能使用其允许的驱动）:
+#   business : postgres / mysql / sqlite          (业务主库，所有域共用)
+#   user     : mongodb  / mysql / sqlite          (用户库)
+#   monitor  : clickhouse / mysql / sqlite         (监控库)
+#   log      : elasticsearch / mysql / sqlite      (日志库)
+# 切换驱动: 改 Driver + 对应 vendor 段即可。
+# 连接池:   统一由顶层 MaxOpenConns/MaxIdleConns/ConnMaxLifetime 控制；
+#           mysql/postgres 的 vendor 段连接池会覆盖顶层（可选），其余驱动忽略。
 # ============================================================
 
 Gateway:
@@ -59,76 +63,119 @@ Rpc:
   Name: hc.rpc
 
   # =====================================================================
-  # 多库配置
+  # 多库配置（统一结构）
   # =====================================================================
-  # 每个库通过 Driver + vendor 段配置，改 Driver 即可切换数据库。
+  # 四个库及其允许驱动（三选一，每个库只能选择其允许的驱动之一）:
+  #   business : postgres / mysql / sqlite
+  #   user     : mongodb  / mysql / sqlite
+  #   monitor  : clickhouse / mysql / sqlite
+  #   log      : elasticsearch / mysql / sqlite
   #
-  # 方式 1 — 最简（sqlite，零依赖起步）:
-  #   Driver: sqlite
-  #   Dsn: file:./data/hc.db?cache=shared&_journal_mode=WAL
-  #
-  # 方式 2 — MySQL（对标 gin 版 database.<name>.mysql）:
-  #   Driver: mysql
-  #   Mysql:
-  #     Master: user:pass@tcp(127.0.0.1:3306)/hc_business?charset=utf8mb4&parseTime=true
-  #     MaxOpenConns: 50
-  #
-  # 方式 3 — PostgreSQL（对标 gin 版 database.<name>.postgres）:
+  # 切换示例（以 business 库为例）:
+  #   # postgres
   #   Driver: postgres
   #   Postgres:
   #     Master: postgres://user:pass@127.0.0.1:5432/hc_business?sslmode=disable
-  #     MaxOpenConns: 50
+  #   # mysql
+  #   Driver: mysql
+  #   Mysql:
+  #     Master: user:pass@tcp(127.0.0.1:3306)/hc_business?charset=utf8mb4&parseTime=true
+  #   # sqlite（当前，零依赖起步）
+  #   Driver: sqlite
+  #   Dsn: file:./data/hc_business.db?cache=shared&_journal_mode=WAL
+  #
+  # 连接池说明:
+  #   mysql/postgres 可用 vendor 段连接池覆盖顶层（可选，不写则回退顶层）。
+  #   mongodb/clickhouse/elasticsearch 统一使用顶层值，vendor 段连接池被忽略。
+  #   sqlite 使用顶层连接池。
   # =====================================================================
   Databases:
     # ---- 业务主库（必配）----
+    # 允许: postgres / mysql / sqlite（当前: sqlite）
     business:
       Driver: sqlite
       Dsn: file:./data/hc_business.db?cache=shared&_journal_mode=WAL
+      # 备选驱动示例（注释）:
+      # Postgres:
+      #   Master: postgres://user:pass@127.0.0.1:5432/hc_business?sslmode=disable
+      # Mysql:
+      #   Master: user:pass@tcp(127.0.0.1:3306)/hc_business?charset=utf8mb4&parseTime=true
       MaxOpenConns: 10
       MaxIdleConns: 5
       ConnMaxLifetime: 1h
       PoolLabel: business
 
-    # ---- 用户库（待拆分）----
+    # ---- 用户库（待按域拆分）----
+    # 允许: mongodb / mysql / sqlite（当前: sqlite）
     user:
       Driver: sqlite
       Dsn: file:./data/hc_users.db?cache=shared&_journal_mode=WAL
+      # 备选驱动示例（注释）:
+      # Mongodb:
+      #   Dsn: mongodb://user:pass@127.0.0.1:27017/hc_users?authSource=admin
+      # Mysql:
+      #   Master: user:pass@tcp(127.0.0.1:3306)/hc_users?charset=utf8mb4&parseTime=true
       MaxOpenConns: 10
       MaxIdleConns: 5
       ConnMaxLifetime: 1h
       PoolLabel: user
 
-    # ---- 监控库（待拆分）----
+    # ---- 监控库（待按域拆分）----
+    # 允许: clickhouse / mysql / sqlite（当前: sqlite）
     monitor:
       Driver: sqlite
       Dsn: file:./data/hc_monitor.db?cache=shared&_journal_mode=WAL
+      # 备选驱动示例（注释）:
+      # Clickhouse:
+      #   Dsn: clickhouse://user:pass@127.0.0.1:9000/hc_monitor
+      # Mysql:
+      #   Master: user:pass@tcp(127.0.0.1:3306)/hc_monitor?charset=utf8mb4&parseTime=true
       MaxOpenConns: 10
       MaxIdleConns: 5
       ConnMaxLifetime: 1h
       PoolLabel: monitor
 
-    # ---- 日志库（待拆分）----
+    # ---- 日志库（待按域拆分）----
+    # 允许: elasticsearch / mysql / sqlite（当前: sqlite）
     log:
       Driver: sqlite
       Dsn: file:./data/hc_logs.db?cache=shared&_journal_mode=WAL
+      # 备选驱动示例（注释）:
+      # Elasticsearch:
+      #   Addresses: ["http://127.0.0.1:9200"]
+      #   IndexPrefix: hc_logs
+      # Mysql:
+      #   Master: user:pass@tcp(127.0.0.1:3306)/hc_logs?charset=utf8mb4&parseTime=true
       MaxOpenConns: 10
       MaxIdleConns: 5
       ConnMaxLifetime: 1h
       PoolLabel: log
 
   # ---------- 缓存 ----------
+  # 支持 L1（进程内 ristretto）+ L2（redis/valkey 二选一）+ Bloom 穿透保护。
   Cache:
     Enabled: false
     L1:
       Enabled: false
       MaxMemoryMB: 256
       DefaultTTL: 5m
+      NumCounters: 10000000
+      MaxCost: 268435456
+      BufferItems: 64
     L2:
       Enabled: false
+      # redis 或 valkey（二选一；二者协议兼容，共用 go-redis 客户端）
       Type: redis
       Addresses:
         - "127.0.0.1:6379"
+      Username: ""
+      Password: ""
+      DB: 0
       PoolSize: 200
+      DialTimeout: 5s
+      ReadTimeout: 3s
+      WriteTimeout: 3s
+      TLS: false
     # 布隆过滤器（缓存穿透保护）。只增不删，按业务 key 总量预估容量。
     # 实际插入量超过 ExpectedKeys 只会抬高假阳性率（穿透保护变弱），
     # 不会产生假阴性，不影响数据正确性。默认约占用 1.2 MB。
@@ -137,9 +184,43 @@ Rpc:
       FalsePositiveRate: 0.01
 
   # ---------- 消息队列 ----------
+  # 支持类型: kafka / rocketmq / rabbitmq / memory（四选一）。
+  # 各后端配置完全独立、互不互通。切换 Type 即可启用对应后端，
+  # 其余子段可保留不删。
   MQ:
     Enabled: false
     Type: memory
+    # Memory 专用（完全独立）
+    Memory:
+      BufferSize: 1024
+    # Kafka 专用（完全独立）
+    Kafka:
+      Brokers:
+        - "127.0.0.1:9092"
+      ConsumerGroup: hc-framework
+      Topic: hc.events
+      RequiredAcks: 1
+      BatchSize: 100
+      BatchBytes: 1048576
+    # RocketMQ 专用（完全独立）
+    RocketMQ:
+      NameServer:
+        - "127.0.0.1:9876"
+      Group: hc-framework
+      Retry: 3
+      Topic: hc.events
+      AccessKey: ""
+      SecretKey: ""
+      Namespace: ""
+    # RabbitMQ 专用（完全独立）
+    RabbitMQ:
+      URL: "amqp://guest:guest@127.0.0.1:5672/"
+      Exchange: hc.events
+      ExchangeType: topic
+      Queue: ""
+      RoutingKey: hc.events
+      Topic: hc.events
+      Prefetch: 1
 
   # ---------- JWT / 业务参数 ----------
   Jwt:

@@ -64,14 +64,24 @@ type L1Config struct {
 	BufferItems int64
 }
 
-// L2Config 分布式缓存配置
+// L2Config 分布式缓存配置。
+//
+// Type 取值: "redis" | "valkey" | "none"。Valkey 是 Redis 协议兼容的
+// drop-in 替代品，二者共用同一套 go-redis 客户端实现，仅在类型标识上区分。
 type L2Config struct {
 	Enabled   bool
-	Type      string // redis / none
+	Type      string // redis / valkey / none
 	Addresses []string
+	Username  string
 	Password  string
 	DB        int
 	PoolSize  int
+	// DialTimeout / ReadTimeout / WriteTimeout 调优 redis/valkey 客户端。
+	DialTimeout  time.Duration `json:",optional"`
+	ReadTimeout  time.Duration `json:",optional"`
+	WriteTimeout time.Duration `json:",optional"`
+	// TLS 启用到 redis/valkey 服务器的 TLS 连接（如云托管实例）。
+	TLS bool `json:",optional"`
 }
 
 // CacheStore 缓存存储接口
@@ -114,8 +124,8 @@ func New(config Config) *Manager {
 		m.l1 = &nilStore{}
 	}
 
-	// L2: Redis 分布式缓存
-	if config.L2.Enabled && config.L2.Type == "redis" && len(config.L2.Addresses) > 0 {
+	// L2: Redis / Valkey 分布式缓存（二者协议兼容，共用实现）。
+	if config.L2.Enabled && (config.L2.Type == "redis" || config.L2.Type == "valkey") && len(config.L2.Addresses) > 0 {
 		m.l2 = newRedisStore(config.L2)
 	} else {
 		m.l2 = nil

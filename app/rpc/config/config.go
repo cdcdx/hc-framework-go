@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cdcdx/hc-framework-go/common/cache"
 	"github.com/cdcdx/hc-framework-go/common/dbclient"
+	"github.com/cdcdx/hc-framework-go/common/mq"
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
-// DBConfig 单库配置（驱动 + 连接池 + 读写分离）。
+// DBConfig 单库配置（驱动 + 连接池）。
 //
 // Driver 指定数据库类型（sqlite / mysql / postgres / mongodb / clickhouse / elasticsearch）。
 // DSN 可通过三种方式提供：
@@ -55,7 +57,9 @@ type DBConfig struct {
 	PoolLabel string `json:",optional"`
 
 	// ---- 连接池（gorm / sql.DB 通用）----
-	MaxOpenConns    int           `json:",default=50"`
+	// 默认值与 gormx.resolvePoolDefaults 对齐（20/10），避免单库默认 50 导致多库总和
+	// 超过 MySQL 默认 max_connections(151)。压测场景建议显式调大并同步调 MySQL 参数。
+	MaxOpenConns    int           `json:",default=20"`
 	MaxIdleConns    int           `json:",default=10"`
 	ConnMaxLifetime time.Duration `json:",default=1h"`
 
@@ -69,10 +73,9 @@ type DBConfig struct {
 }
 
 // DBVendorConfig SQL 类数据库的连接信息（对标 gin 版 database.<name>.mysql/postgres）。
+// 仅支持单主连接串 + 连接池覆盖，读写分离暂未实现。
 type DBVendorConfig struct {
 	Master          string        `json:",optional"`
-	Slaves          []string      `json:",optional"`
-	ReplicationLag  time.Duration `json:",optional"`
 	MaxIdleConns    int           `json:",optional"`
 	MaxOpenConns    int           `json:",optional"`
 	ConnMaxLifetime time.Duration `json:",optional"`
@@ -179,9 +182,9 @@ func (c *DBConfig) ResolveDSN() (driver, dsn string, err error) {
 }
 
 // IsSQL 判断是否为 SQL 类数据库（走 gorm 连接）。
+// 直接按 Driver 字段判定，不触发 ResolveDSN（避免空 Driver 时不必要的推断副作用）。
 func (c *DBConfig) IsSQL() bool {
-	d, _, _ := c.ResolveDSN()
-	switch d {
+	switch c.Driver {
 	case "sqlite", "mysql", "postgres", "postgresql":
 		return true
 	default:
@@ -191,6 +194,8 @@ func (c *DBConfig) IsSQL() bool {
 
 // resolvePool 计算最终连接池参数。
 // 优先级: 与 driver 匹配的 vendor 段 > 顶层通用字段。
+// vendor 段各字段独立覆盖：MaxOpenConns>0 仅覆盖 maxOpen，MaxIdleConns>0 仅覆盖 maxIdle，
+// ConnMaxLifetime>0 仅覆盖 connMax。避免 MaxOpenConns>0 时连带把 maxIdle 刷为 0。
 func (c *DBConfig) resolvePool(driver string) (maxOpen, maxIdle int, connMax time.Duration) {
 	maxOpen, maxIdle, connMax = c.MaxOpenConns, c.MaxIdleConns, c.ConnMaxLifetime
 
@@ -206,6 +211,8 @@ func (c *DBConfig) resolvePool(driver string) (maxOpen, maxIdle int, connMax tim
 
 	if v.MaxOpenConns > 0 {
 		maxOpen = v.MaxOpenConns
+	}
+	if v.MaxIdleConns > 0 {
 		maxIdle = v.MaxIdleConns
 	}
 	if v.ConnMaxLifetime > 0 {
@@ -308,7 +315,8 @@ type IdleConfig struct {
 
 // CacheConfig 缓存配置。
 type CacheConfig struct {
-	Enabled bool             `json:",default=true"`
+	// Enabled 缓存总开关。默认 false（须显式开启，避免未配置 Redis 时启动报错）。
+	Enabled bool             `json:",default=false"`
 	L1      L1CacheConfig    `json:",optional"`
 	L2      L2CacheConfig    `json:",optional"`
 	Bloom   BloomCacheConfig `json:",optional"`
@@ -324,24 +332,174 @@ type BloomCacheConfig struct {
 	FalsePositiveRate float64 `json:",default=0.01"`
 }
 
+// ToCacheBloom 桥接到 common/cache 的 BloomConfig，供 ServiceContext 装配。
+func (c BloomCacheConfig) ToCacheBloom() cache.BloomConfig {
+	return cache.BloomConfig{
+		ExpectedKeys:      c.ExpectedKeys,
+		FalsePositiveRate: c.FalsePositiveRate,
+	}
+}
+
 type L1CacheConfig struct {
 	Enabled     bool          `json:",default=true"`
 	MaxMemoryMB int           `json:",default=256"`
 	DefaultTTL  time.Duration `json:",default=5m"`
 	NumCounters int64         `json:",default=10000000"`
 	MaxCost     int64         `json:",default=268435456"`
+	// BufferItems Ristretto 写缓冲容量，默认 64。越大写吞吐越高但内存占用略增。
+	BufferItems int64 `json:",default=64"`
+}
+
+// ToCacheL1 桥接到 common/cache 的 L1Config，供 ServiceContext 装配两级缓存。
+// MaxMemoryMB 仅作为文档参考，实际以 MaxCost 为准（在 ServiceContext 中换算）。
+func (c L1CacheConfig) ToCacheL1() cache.L1Config {
+	return cache.L1Config{
+		Enabled:     c.Enabled,
+		MaxMemoryMB: c.MaxMemoryMB,
+		DefaultTTL:  c.DefaultTTL,
+		NumCounters: c.NumCounters,
+		MaxCost:     c.MaxCost,
+		BufferItems: c.BufferItems,
+	}
 }
 
 type L2CacheConfig struct {
 	Enabled   bool     `json:",default=true"`
 	Type      string   `json:",default=redis"`
 	Addresses []string `json:",optional"`
+	Username  string   `json:",optional"`
 	Password  string   `json:",optional"`
 	DB        int      `json:",default=0"`
 	PoolSize  int      `json:",default=200"`
+	// 连接/读写超时，0 表示使用 Redis 客户端默认（5s）。
+	DialTimeout  time.Duration `json:",optional"`
+	ReadTimeout  time.Duration `json:",optional"`
+	WriteTimeout time.Duration `json:",optional"`
+	// TLS 是否启用（云 Redis / 公网部署建议开启）。
+	TLS bool `json:",optional"`
+}
+
+// ToCacheL2 桥接到 common/cache 的 L2Config，供 ServiceContext 装配两级缓存。
+//
+// Type 可为 "redis" 或 "valkey"（二者协议兼容，共用同一客户端实现），
+// 超时与 TLS 配置一并透传，支持云托管/高延迟网络场景。
+func (c L2CacheConfig) ToCacheL2() cache.L2Config {
+	return cache.L2Config{
+		Enabled:      c.Enabled,
+		Type:         c.Type,
+		Addresses:    c.Addresses,
+		Username:     c.Username,
+		Password:     c.Password,
+		DB:           c.DB,
+		PoolSize:     c.PoolSize,
+		DialTimeout:  c.DialTimeout,
+		ReadTimeout:  c.ReadTimeout,
+		WriteTimeout: c.WriteTimeout,
+		TLS:          c.TLS,
+	}
 }
 
 type MQConfig struct {
 	Enabled bool   `json:",default=false"`
 	Type    string `json:",default=memory"`
+	// 各后端配置完全独立、互不互通。切换 Type 后只读取对应子段。
+	Kafka    KafkaMQConfig    `json:",optional"`
+	RocketMQ RocketMQConfig   `json:",optional"`
+	RabbitMQ RabbitMQConfig   `json:",optional"`
+	Memory   MemoryMQConfig   `json:",optional"`
+}
+
+// KafkaMQConfig Kafka 专用连接参数（完全独立）。
+type KafkaMQConfig struct {
+	// Brokers broker 地址列表（如 ["127.0.0.1:9092"]）。
+	Brokers []string `json:",optional"`
+	// ConsumerGroup 消费者组 ID。
+	ConsumerGroup string `json:",optional"`
+	// Topic 默认主题（未显式指定 topic 时使用）。
+	Topic string `json:",optional"`
+	// RequiredAcks：0 不等待 / 1 等待 leader / -1 等待全部副本（默认 1）。
+	RequiredAcks int `json:",optional"`
+	// BatchSize 批量攒批上限（条）。
+	BatchSize int `json:",optional"`
+	// BatchBytes 批量字节上限。
+	BatchBytes int `json:",optional"`
+}
+
+// RocketMQConfig RocketMQ 专用连接参数（完全独立）。
+type RocketMQConfig struct {
+	// NameServer 地址列表（如 ["127.0.0.1:9876"]）。
+	NameServer []string `json:",optional"`
+	// Group 消费/生产组名。
+	Group string `json:",optional"`
+	// Retry 发送重试次数。
+	Retry int `json:",optional"`
+	// Topic 默认主题。
+	Topic string `json:",optional"`
+	// AccessKey / SecretKey 用于开启 ACL 的 NameServer 集群。
+	AccessKey string `json:",optional"`
+	SecretKey string `json:",optional"`
+	// Namespace 命名空间（如阿里云 ONS 实例 ID）。
+	Namespace string `json:",optional"`
+}
+
+// RabbitMQConfig RabbitMQ 专用连接参数（完全独立）。
+type RabbitMQConfig struct {
+	// URL 完整的 amqp 连接串（如 amqp://user:pass@host:5672/vhost）。
+	URL string `json:",optional"`
+	// Exchange 交换机名称（发布/订阅时声明）。
+	Exchange string `json:",optional"`
+	// ExchangeType 交换机类型：direct / topic / fanout（默认 topic）。
+	ExchangeType string `json:",default=topic"`
+	// Queue 默认队列名（消费时声明并绑定；空则按 topic 派生）。
+	Queue string `json:",optional"`
+	// RoutingKey 路由键（默认与 topic 一致）。
+	RoutingKey string `json:",optional"`
+	// Topic 未显式指定 topic 时使用的默认 routing key。
+	Topic string `json:",optional"`
+	// Prefetch 消费者预取条数（QoS），默认 1（公平分发）。
+	Prefetch int `json:",default=1"`
+}
+
+// MemoryMQConfig 内存队列专用参数（完全独立）。
+type MemoryMQConfig struct {
+	// BufferSize 通道缓冲大小，默认 1024。
+	BufferSize int `json:",default=1024"`
+}
+
+// ToMQConfig 桥接到 common/mq 的 Config，供 ServiceContext 装配消息队列。
+// 各后端配置完全独立透传，切换 Type 后只读取对应子段。
+func (c MQConfig) ToMQConfig() mq.Config {
+	return mq.Config{
+		Enabled: c.Enabled,
+		Type:    c.Type,
+		Kafka: mq.KafkaConfig{
+			Brokers:       c.Kafka.Brokers,
+			ConsumerGroup: c.Kafka.ConsumerGroup,
+			Topic:         c.Kafka.Topic,
+			RequiredAcks:  c.Kafka.RequiredAcks,
+			BatchSize:     c.Kafka.BatchSize,
+			BatchBytes:    c.Kafka.BatchBytes,
+		},
+		RocketMQ: mq.RocketMQConfig{
+			NameServer: c.RocketMQ.NameServer,
+			Group:      c.RocketMQ.Group,
+			Retry:      c.RocketMQ.Retry,
+			Topic:      c.RocketMQ.Topic,
+			AccessKey:  c.RocketMQ.AccessKey,
+			SecretKey:  c.RocketMQ.SecretKey,
+			Namespace:  c.RocketMQ.Namespace,
+		},
+		RabbitMQ: mq.RabbitMQConfig{
+			URL:          c.RabbitMQ.URL,
+			Exchange:     c.RabbitMQ.Exchange,
+			ExchangeType: c.RabbitMQ.ExchangeType,
+			Queue:        c.RabbitMQ.Queue,
+			RoutingKey:   c.RabbitMQ.RoutingKey,
+			Topic:        c.RabbitMQ.Topic,
+			Prefetch:     c.RabbitMQ.Prefetch,
+		},
+		Memory: mq.MemoryConfig{
+			BufferSize: c.Memory.BufferSize,
+		},
+	}
 }
