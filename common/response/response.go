@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/cdcdx/hc-framework-go/common/errorx"
+	"github.com/zeromicro/go-zero/core/logx"
 	"github.com/zeromicro/go-zero/core/trace"
 )
 
@@ -47,7 +48,10 @@ func resolveMsg(code int, customMsg ...string) string {
 func writeJSON(w http.ResponseWriter, httpStatus int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(httpStatus)
-	_ = json.NewEncoder(w).Encode(body)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		// 客户端断开或编码失败时已无法改写状态码，至少记录日志便于排查。
+		logx.Errorf("response.writeJSON: encode failed: %v", err)
+	}
 }
 
 // Success 成功响应
