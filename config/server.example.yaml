@@ -18,6 +18,7 @@ Gateway:
   Name: hc-gateway
   Host: 0.0.0.0
   Port: 8080
+  Timeout: 30000
   MaxConns: 10000
 
   Auth:
