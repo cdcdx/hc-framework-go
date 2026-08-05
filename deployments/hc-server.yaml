@@ -1,0 +1,159 @@
+# ============================================================
+# HC Framework — 合并单进程 hc-server 的 K8s 部署清单
+# 对应 build.sh docker 的 `kubectl apply -f deployments/`。
+#
+# 单进程承载 Gateway(REST) + 同进程后端 logic；
+# REST 与 Prometheus 指标共用 :8080（/metrics 路径）。
+#
+# 依赖的中间件（MySQL/Redis/Mongo/Kafka 等）见同目录
+# mysql-mgr.yaml / redis-cluster.yaml / mongodb-rs.yaml /
+# kafka.yaml / clickhouse.yaml / elasticsearch.yaml，
+# 按需 apply，不在本清单内。
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hc-server-config
+  labels:
+    app: hc-server
+data:
+  server.yaml: |
+    # ===== Gateway REST 网关 =====
+    Gateway:
+      Name: hc.gateway
+      Host: 0.0.0.0
+      Port: 8080
+      Mode: prod
+      Timeout: 30000
+      MaxConns: 100000
+      MaxBytes: 10485760
+      Log: true
+      Recover: true
+      Breaker: true
+      Shedding: true
+      # 覆盖 JWT 与 Google OAuth 等敏感配置时，建议在部署时挂载 Secret。
+    Rpc:
+      Name: hc.rpc
+      Databases:
+        business:
+          Driver: sqlite
+          Dsn: file:/data/hc_business.db?cache=shared&_journal_mode=WAL
+        user:
+          Driver: sqlite
+          Dsn: file:/data/hc_users.db?cache=shared&_journal_mode=WAL
+        monitor:
+          Driver: sqlite
+          Dsn: file:/data/hc_monitor.db?cache=shared&_journal_mode=WAL
+        log:
+          Driver: sqlite
+          Dsn: file:/data/hc_logs.db?cache=shared&_journal_mode=WAL
+      Cache:
+        Enabled: false
+      MQ:
+        Enabled: false
+        Type: memory
+      Jwt:
+        Algorithm: HS256
+        SigningKey: "change-me-in-production"
+        Issuer: hc-framework
+        AccessTTL: 2h
+        RefreshTTL: 168h
+      BcryptCost: 4
+      Idle:
+        MaxActiveDevices: 3
+        PointsPerMinute: 10
+        DailyPointsLimit: 14400
+        TimeoutMinutes: 5
+        ScanInterval: 30s
+      FlashSale:
+        Timeout: 3s
+      Log:
+        ServiceName: hc-rpc
+        Mode: console
+        Encoding: plain
+        Level: info
+      Telemetry:
+        Name: hc.rpc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hc-server
+  labels:
+    app: hc-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hc-server
+  template:
+    metadata:
+      labels:
+        app: hc-server
+      annotations:
+        # Prometheus 抓取注解（配合 prometheus-operator 或 kube-prometheus）。
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: hc-server
+          image: hc-framework:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: CONFIG_FILE
+              value: /app/config/server.yaml
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          configMap:
+            name: hc-server-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hc-server
+  labels:
+    app: hc-server
+spec:
+  type: ClusterIP
+  selector:
+    app: hc-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
