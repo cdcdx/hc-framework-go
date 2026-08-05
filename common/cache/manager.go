@@ -152,7 +152,7 @@ func (m *Manager) Get(ctx context.Context, key string) ([]byte, error) {
 	return nil, nil
 }
 
-// Set 同时写入 L1 和 L2。L2 失败仅记日志不报错。
+// Set 同时写入 L1 和 L2。L2 失败仅记日志不报错（L1 已有数据，且 L1 有 TTL 最终一致）。
 func (m *Manager) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	if m == nil {
 		return nil
@@ -162,19 +162,23 @@ func (m *Manager) Set(ctx context.Context, key string, value []byte, ttl time.Du
 		return err
 	}
 	if m.l2 != nil {
-		_ = m.l2.Set(ctx, key, value, ttl)
+		if err := m.l2.Set(ctx, key, value, ttl); err != nil {
+			logx.Errorf("cache: L2 set failed for %s: %v", key, err)
+		}
 	}
 	return nil
 }
 
-// Delete 同时删除 L1 和 L2
+// Delete 同时删除 L1 和 L2。L2 失败记日志（L1 已删除，L2 脏数据由 TTL 兜底）。
 func (m *Manager) Delete(ctx context.Context, key string) error {
 	if m == nil {
 		return nil
 	}
 	_ = m.l1.Delete(ctx, key)
 	if m.l2 != nil {
-		_ = m.l2.Delete(ctx, key)
+		if err := m.l2.Delete(ctx, key); err != nil {
+			logx.Errorf("cache: L2 delete failed for %s: %v", key, err)
+		}
 	}
 	return nil
 }

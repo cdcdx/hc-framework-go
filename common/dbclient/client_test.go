@@ -141,3 +141,31 @@ func TestDBSpec_IsSQL(t *testing.T) {
 		}
 	}
 }
+
+// TestFactory_Close_AggregatesErrors 验证 Close 尽力关闭全部连接且返回聚合错误：
+// 即使某个连接关闭失败也不提前返回，确保其余连接仍被关闭。
+func TestFactory_Close_AggregatesErrors(t *testing.T) {
+	f := NewFactory(Specs{
+		"biz1": {Driver: "sqlite", DSN: "file::memory:"},
+		"biz2": {Driver: "sqlite", DSN: "file::memory:"},
+	})
+	if _, err := f.SQL("biz1"); err != nil {
+		t.Fatalf("SQL biz1: %v", err)
+	}
+	if _, err := f.SQL("biz2"); err != nil {
+		t.Fatalf("SQL biz2: %v", err)
+	}
+
+	// 正常关闭：返回 nil，且两库连接均已释放。
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close returned error on healthy dbs: %v", err)
+	}
+
+	// 关闭后 ListSQL 仍保留已创建实例记录（设计如此），但再次打开不应 panic。
+	if _, err := f.SQL("biz1"); err != nil {
+		t.Fatalf("SQL after close should reopen: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}

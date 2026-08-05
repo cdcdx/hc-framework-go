@@ -15,6 +15,7 @@
 package dbclient
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -190,23 +191,27 @@ func (f *Factory) Health() error {
 }
 
 // Close 关闭所有已创建的 SQL 和 NoSQL 连接。
+// 会尽力关闭每一个连接：即使某个连接关闭失败，也会继续关闭其余连接，
+// 最后将所有错误聚合返回，避免提前返回导致后续连接泄漏。
 func (f *Factory) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	var errs []error
 	for name, db := range f.sqlDBs {
 		sqlDB, err := db.DB()
 		if err != nil {
-			return fmt.Errorf("get sql.DB for %s: %w", name, err)
+			errs = append(errs, fmt.Errorf("get sql.DB for %s: %w", name, err))
+			continue
 		}
 		if err := sqlDB.Close(); err != nil {
-			return fmt.Errorf("close db %s: %w", name, err)
+			errs = append(errs, fmt.Errorf("close db %s: %w", name, err))
 		}
 	}
 	for name, c := range f.noSQLClients {
 		if err := c.Close(); err != nil {
-			return fmt.Errorf("close NoSQL %s: %w", name, err)
+			errs = append(errs, fmt.Errorf("close NoSQL %s: %w", name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

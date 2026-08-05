@@ -42,25 +42,26 @@ func newCaptchaProvider(c config.Config) captcha.CaptchaProvider {
 
 // NewServiceContext 独立部署时装配全部依赖（创建 gRPC 客户端连接 rpc）。
 func NewServiceContext(c config.Config) *ServiceContext {
-	mgr, err := jwt.NewManager(
-		c.Auth.Jwt.Algorithm, c.Auth.Jwt.SigningKey,
-		"", "",
-		c.Auth.Jwt.Issuer, c.Auth.Jwt.AccessTTL, c.Auth.Jwt.RefreshTTL,
-	)
-	if err != nil {
-		logx.Must(err)
-	}
-
 	return &ServiceContext{
 		Config:          c,
 		HcRpc:           hcclient.NewHc(zrpc.MustNewClient(c.HcRpc)),
-		JwtMgr:          mgr,
+		JwtMgr:          newJwtManager(c),
 		CaptchaProvider: newCaptchaProvider(c),
 	}
 }
 
 // NewServiceContextWithClient 合并部署时装配依赖（HcRpc 由外部注入进程内客户端）。
 func NewServiceContextWithClient(c config.Config, hcClient hcclient.Hc) *ServiceContext {
+	return &ServiceContext{
+		Config:          c,
+		HcRpc:           hcClient,
+		JwtMgr:          newJwtManager(c),
+		CaptchaProvider: newCaptchaProvider(c),
+	}
+}
+
+// newJwtManager 构建 JWT 管理器，集中处理配置到 jwt.NewManager 的参数映射与失败退出。
+func newJwtManager(c config.Config) *jwt.Manager {
 	mgr, err := jwt.NewManager(
 		c.Auth.Jwt.Algorithm, c.Auth.Jwt.SigningKey,
 		"", "",
@@ -69,11 +70,5 @@ func NewServiceContextWithClient(c config.Config, hcClient hcclient.Hc) *Service
 	if err != nil {
 		logx.Must(err)
 	}
-
-	return &ServiceContext{
-		Config:          c,
-		HcRpc:           hcClient,
-		JwtMgr:          mgr,
-		CaptchaProvider: newCaptchaProvider(c),
-	}
+	return mgr
 }
