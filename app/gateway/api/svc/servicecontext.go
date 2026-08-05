@@ -17,6 +17,11 @@ type ServiceContext struct {
 	// 合并部署时由外部注入进程内 LocalHcClient；独立部署时由 zrpc client 创建。
 	HcRpc hcclient.Hc
 
+	// zrpcClient 仅当独立部署（NewServiceContext）自建 zrpc 客户端时非 nil，
+	// 用于进程退出时优雅关闭底层 gRPC 连接；合并部署注入的 client 不可关闭（ownRPC=false）。
+	zrpcClient zrpc.Client
+	ownRPC     bool
+
 	JwtMgr *jwt.Manager
 
 	CaptchaProvider captcha.CaptchaProvider
@@ -42,9 +47,12 @@ func newCaptchaProvider(c config.Config) captcha.CaptchaProvider {
 
 // NewServiceContext 独立部署时装配全部依赖（创建 gRPC 客户端连接 rpc）。
 func NewServiceContext(c config.Config) *ServiceContext {
+	cli := zrpc.MustNewClient(c.HcRpc)
 	return &ServiceContext{
 		Config:          c,
-		HcRpc:           hcclient.NewHc(zrpc.MustNewClient(c.HcRpc)),
+		HcRpc:           hcclient.NewHc(cli),
+		zrpcClient:      cli,
+		ownRPC:          true,
 		JwtMgr:          newJwtManager(c),
 		CaptchaProvider: newCaptchaProvider(c),
 	}
@@ -55,8 +63,20 @@ func NewServiceContextWithClient(c config.Config, hcClient hcclient.Hc) *Service
 	return &ServiceContext{
 		Config:          c,
 		HcRpc:           hcClient,
+		ownRPC:          false,
 		JwtMgr:          newJwtManager(c),
 		CaptchaProvider: newCaptchaProvider(c),
+	}
+}
+
+// Close 优雅关闭网关持有的外部资源：仅当独立部署自建 zrpc client 时关闭底层 gRPC 连接。
+// 合并部署（NewServiceContextWithClient）注入的 client 由外部进程生命周期管理，此处不关闭。
+// 重复调用安全（zrpc.Client.Conn() 的 Close 幂等，重复关闭仅返回错误，已被忽略）。
+func (svc *ServiceContext) Close() {
+	if svc.ownRPC && svc.zrpcClient != nil {
+		if err := svc.zrpcClient.Conn().Close(); err != nil {
+			logx.Errorf("[gateway] close rpc conn failed: %v", err)
+		}
 	}
 }
 

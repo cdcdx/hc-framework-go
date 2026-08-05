@@ -34,9 +34,16 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 		qty = 1
 	}
 
-	// 商品在售校验
-	var item model.ShopItem
-	err := l.svcCtx.Db.Where("id = ? AND is_active = ?", in.ItemId, true).First(&item).Error
+	// 商品在售校验：仅查询建单所需字段（id/name/price_points），避免 SELECT * 拉取无用列。
+	var item struct {
+		ID          int64  `gorm:"column:id"`
+		Name        string `gorm:"column:name"`
+		PricePoints int64  `gorm:"column:price_points"`
+	}
+	err := l.svcCtx.Db.Model(&model.ShopItem{}).
+		Select("id", "name", "price_points").
+		Where("id = ? AND is_active = ?", in.ItemId, true).
+		First(&item).Error
 	if gormx.IsRecordNotFound(err) {
 		return nil, errorx.New(errorx.CodeItemOffline)
 	}

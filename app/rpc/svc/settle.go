@@ -2,11 +2,10 @@ package svc
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"time"
 
 	"github.com/cdcdx/hc-framework-go/common/errorx"
-	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
 	"gorm.io/gorm"
@@ -41,7 +40,7 @@ func settleRecord(ctx context.Context, svcCtx *ServiceContext, rec *model.IdleRe
 	}
 
 	if points > 0 {
-		// 每日上限
+		// 每日上限校验（先于入账，确保上限不通过时不产生积分）
 		day := until.Format("2006-01-02")
 		if err := accumulateDaily(ctx, svcCtx, rec.UserID, day, points); err != nil {
 			return 0, err
@@ -80,39 +79,39 @@ func publishSettleEvent(ctx context.Context, svcCtx *ServiceContext, rec *model.
 	if svcCtx.MQProducer == nil {
 		return
 	}
-	// 用最简单的 JSON 拼接避免 import encoding/json
-	body := fmt.Sprintf(`{"user_id":"%s","device_id":"%s","points":%d,"status":"%s","duration_sec":%d}`,
-		rec.UserID, rec.DeviceID, points, status, rec.DurationSeconds)
-	_ = svcCtx.MQProducer.SendAsync(ctx, "hc.idle.settled", rec.UserID, []byte(body))
+	body, err := json.Marshal(map[string]any{
+		"user_id":      rec.UserID,
+		"device_id":    rec.DeviceID,
+		"points":       points,
+		"status":       status,
+		"duration_sec": rec.DurationSeconds,
+	})
+	if err != nil {
+		logx.WithContext(ctx).Errorf("[settle] marshal event failed: %v", err)
+		return
+	}
+	_ = svcCtx.MQProducer.SendAsync(ctx, "hc.idle.settled", rec.UserID, body)
 }
 
-// accumulateDaily 按 (user_id, day) 累加今日挂机积分，超过每日上限返回 CodeDailyPointsLimit
+// accumulateDaily 按 (user_id, day) 累加今日挂机积分，超过每日上限返回 CodeDailyPointsLimit。
+// 该函数在 addPoints 入账之前调用，确保"上限校验不通过"时不会产生积分。
 func accumulateDaily(ctx context.Context, svcCtx *ServiceContext, userID, day string, points int64) error {
 	limit := svcCtx.Config.Idle.DailyPointsLimit
 
 	var dp model.IdleDailyPoints
-	err := svcCtx.Db.WithContext(ctx).Where("user_id = ? AND day = ?", userID, day).First(&dp).Error
-	if err == nil {
-		if dp.Total+points > limit {
-			return errorx.New(errorx.CodeDailyPointsLimit)
-		}
-		if err := svcCtx.Db.WithContext(ctx).Model(&dp).
-			UpdateColumn("total", gorm.Expr("total + ?", points)).Error; err != nil {
-			return errorx.New(errorx.CodeDBError, err.Error())
-		}
-		return nil
-	}
-	if !gormx.IsRecordNotFound(err) {
+	// FirstOrCreate 原子地确保当日记录存在，避免并发下两个 Create 触发唯一约束冲突。
+	err := svcCtx.Db.WithContext(ctx).
+		Where("user_id = ? AND day = ?", userID, day).
+		Attrs(model.IdleDailyPoints{UserID: userID, Day: day, Total: 0}).
+		FirstOrCreate(&dp).Error
+	if err != nil {
 		return errorx.New(errorx.CodeDBError, err.Error())
 	}
-	if points > limit {
+	if dp.Total+points > limit {
 		return errorx.New(errorx.CodeDailyPointsLimit)
 	}
-	if err := svcCtx.Db.WithContext(ctx).Create(&model.IdleDailyPoints{
-		UserID: userID,
-		Day:    day,
-		Total:  points,
-	}).Error; err != nil {
+	if err := svcCtx.Db.WithContext(ctx).Model(&dp).
+		UpdateColumn("total", gorm.Expr("total + ?", points)).Error; err != nil {
 		return errorx.New(errorx.CodeDBError, err.Error())
 	}
 	return nil

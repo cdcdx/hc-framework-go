@@ -178,16 +178,18 @@ func (f *Factory) Health() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	var errs []error
 	for name, db := range f.sqlDBs {
 		sqlDB, err := db.DB()
 		if err != nil {
-			return fmt.Errorf("db %s: %w", name, err)
+			errs = append(errs, fmt.Errorf("db %s: %w", name, err))
+			continue
 		}
 		if err := sqlDB.Ping(); err != nil {
-			return fmt.Errorf("db %s ping: %w", name, err)
+			errs = append(errs, fmt.Errorf("db %s ping: %w", name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // Close 关闭所有已创建的 SQL 和 NoSQL 连接。

@@ -42,8 +42,20 @@ func Open(driver, dsn string) (*gorm.DB, error) {
 	return OpenWithPool(driver, dsn, PoolConfig{})
 }
 
+// defaultMaxOpenConns / defaultMaxIdleConns 是连接池的兜底上限。
+// 当上层未显式配置 MaxOpenConns（即 <=0）时采用，避免驱动默认值（mysql 为 0 = 无限制）
+// 在高并发下无限创建连接，打爆数据库 max_connections（Error 1040 Too many connections）。
+// sqlite 默认仍无限制（单文件库无服务端连接数约束，且限制反而影响并发读写）。
+const (
+	defaultMaxOpenConns = 50
+	defaultMaxIdleConns = 10
+)
+
 // OpenWithPool 在 Open 基础上应用连接池限制，并后台采集 db_pool_utilization /
-// db_pool_wait_count_total 指标（仅当 MaxOpenConns > 0 时启用连接池限制）。
+// db_pool_wait_count_total 指标。
+// 连接池兜底：MaxOpenConns <= 0 时强制设为 defaultMaxOpenConns（mysql 驱动默认 0=无限制，
+// 是 Error 1040 的根因）；MaxIdleConns <= 0 时设为 defaultMaxIdleConns。
+// driver == "sqlite" 时不兜底（本地单文件库，无服务端连接数约束）。
 func OpenWithPool(driver, dsn string, pool PoolConfig) (*gorm.DB, error) {
 	var dialector gorm.Dialector
 	switch driver {
@@ -71,11 +83,16 @@ func OpenWithPool(driver, dsn string, pool PoolConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("get sql.DB: %w", err)
 	}
 
-	if pool.MaxOpenConns > 0 {
-		sqlDB.SetMaxOpenConns(pool.MaxOpenConns)
+	// 连接池兜底上限：
+	// - mysql/postgres 等客户端-服务端库，MaxOpenConns<=0 时强制兜底（驱动默认 0=无限制，
+	//   是 Error 1040 Too many connections 的根因）。
+	// - sqlite 单文件库无服务端连接数约束，仅当显式配置 >0 时应用，否则保留默认（不限）。
+	maxOpen, maxIdle := resolvePoolDefaults(driver, pool)
+	if maxOpen > 0 {
+		sqlDB.SetMaxOpenConns(maxOpen)
 	}
-	if pool.MaxIdleConns > 0 {
-		sqlDB.SetMaxIdleConns(pool.MaxIdleConns)
+	if maxIdle > 0 {
+		sqlDB.SetMaxIdleConns(maxIdle)
 	}
 	if pool.ConnMaxLifetime > 0 {
 		sqlDB.SetConnMaxLifetime(pool.ConnMaxLifetime)
@@ -88,6 +105,26 @@ func OpenWithPool(driver, dsn string, pool PoolConfig) (*gorm.DB, error) {
 	startPoolMetrics(sqlDB, label)
 
 	return db, nil
+}
+
+// resolvePoolDefaults 计算最终生效的连接池参数。
+// 规则：
+//   - MaxOpenConns/MaxIdleConns > 0：尊重显式配置。
+//   - 否则，mysql/postgres 等客户端-服务端库兜底为 defaultMaxOpenConns/defaultMaxIdleConns
+//     （驱动默认 0=无限制，是高并发下 Error 1040 Too many connections 的根因）。
+//   - sqlite 单文件库无服务端连接数约束，未显式配置时返回 0（不限制）。
+func resolvePoolDefaults(driver string, pool PoolConfig) (maxOpen, maxIdle int) {
+	if pool.MaxOpenConns > 0 {
+		maxOpen = pool.MaxOpenConns
+	} else if driver != "sqlite" {
+		maxOpen = defaultMaxOpenConns
+	}
+	if pool.MaxIdleConns > 0 {
+		maxIdle = pool.MaxIdleConns
+	} else if driver != "sqlite" {
+		maxIdle = defaultMaxIdleConns
+	}
+	return maxOpen, maxIdle
 }
 
 // startPoolMetrics 周期性把连接池统计写入 Prometheus 指标。

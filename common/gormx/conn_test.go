@@ -36,6 +36,49 @@ func TestOpen_UnsupportedDriver(t *testing.T) {
 	}
 }
 
+// TestResolvePoolDefaults 验证连接池兜底规则（不依赖真实 DB 驱动）：
+//   - 显式 >0 优先；
+//   - mysql/postgres 未配置时兜底为 defaultMax*；
+//   - sqlite 未配置时不兜底（返回 0 = 不限制）。
+func TestResolvePoolDefaults(t *testing.T) {
+	cases := []struct {
+		driver   string
+		pool     PoolConfig
+		wantMax  int
+		wantIdle int
+		desc     string
+	}{
+		{"mysql", PoolConfig{}, defaultMaxOpenConns, defaultMaxIdleConns, "mysql 无配置应兜底"},
+		{"postgres", PoolConfig{}, defaultMaxOpenConns, defaultMaxIdleConns, "postgres 无配置应兜底"},
+		{"sqlite", PoolConfig{}, 0, 0, "sqlite 无配置不兜底"},
+		{"mysql", PoolConfig{MaxOpenConns: 80, MaxIdleConns: 20}, 80, 20, "mysql 显式优先"},
+		{"sqlite", PoolConfig{MaxOpenConns: 7, MaxIdleConns: 3}, 7, 3, "sqlite 显式优先"},
+	}
+	for _, c := range cases {
+		maxOpen, maxIdle := resolvePoolDefaults(c.driver, c.pool)
+		if maxOpen != c.wantMax || maxIdle != c.wantIdle {
+			t.Errorf("%s: 期望 (max=%d,idle=%d) 实际 (max=%d,idle=%d)",
+				c.desc, c.wantMax, c.wantIdle, maxOpen, maxIdle)
+		}
+	}
+}
+
+// TestOpenWithPool_ExplicitWins 验证 sqlite 显式配置被实际应用（open 后 MaxOpenConnections 生效）。
+func TestOpenWithPool_ExplicitWins(t *testing.T) {
+	db, err := OpenWithPool("sqlite", ":memory:", PoolConfig{
+		MaxOpenConns: 7,
+		MaxIdleConns: 3,
+		Label:        "test",
+	})
+	if err != nil {
+		t.Fatalf("OpenWithPool: %v", err)
+	}
+	sqlDB, _ := db.DB()
+	if st := sqlDB.Stats(); st.MaxOpenConnections != 7 {
+		t.Errorf("sqlite 显式 7 应保留，实际 %d", st.MaxOpenConnections)
+	}
+}
+
 func TestIsRecordNotFound(t *testing.T) {
 	if IsRecordNotFound(nil) {
 		t.Fatal("nil error should not be record-not-found")

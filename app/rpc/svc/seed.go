@@ -6,7 +6,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// seedTasks 确保任务定义存在（幂等）
+// seedTasks 确保任务定义存在（幂等）。整批在单事务中完成，减少往返并保证原子性。
 func seedTasks(db *gorm.DB) {
 	defs := []model.Task{
 		{TaskType: "daily", TaskKey: model.TaskKeyDailyLogin, TaskName: "每日登录", TargetValue: 1, RewardPoints: 10, IsActive: true},
@@ -17,15 +17,20 @@ func seedTasks(db *gorm.DB) {
 		{TaskType: "achievement", TaskKey: model.TaskKeyAchievePoints10k, TaskName: "累计积分 10000", TargetValue: 10000, RewardPoints: 500, IsActive: true},
 		{TaskType: "achievement", TaskKey: model.TaskKeyAchieveRedeem100, TaskName: "累计兑换 100 次", TargetValue: 100, RewardPoints: 2000, IsActive: true},
 	}
-	for _, t := range defs {
-		var count int64
-		if err := db.Model(&model.Task{}).Where("task_key = ?", t.TaskKey).Count(&count).Error; err != nil {
-			logx.Must(err)
-		}
-		if count == 0 {
-			if err := db.Create(&t).Error; err != nil {
-				logx.Must(err)
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		for _, t := range defs {
+			var count int64
+			if err := tx.Model(&model.Task{}).Where("task_key = ?", t.TaskKey).Count(&count).Error; err != nil {
+				return err
+			}
+			if count == 0 {
+				if err := tx.Create(&t).Error; err != nil {
+					return err
+				}
 			}
 		}
+		return nil
+	}); err != nil {
+		logx.Must(err)
 	}
 }
