@@ -2,6 +2,7 @@ package logic
 
 import (
 	"context"
+	"time"
 
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
@@ -28,6 +29,15 @@ func NewRedeemLogic(ctx context.Context, svcCtx *svc.ServiceContext) *RedeemLogi
 }
 
 func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, error) {
+	// 整体超时保护：高并发下若 DB 慢，超时释放连接，避免请求无限挂起导致 EOF。
+	// 默认 5s（普通兑换逻辑比抢购多一步快照读，稍长于 FlashSale.Timeout 的 3s）。
+	timeout := l.svcCtx.Config.FlashSale.Timeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(l.ctx, timeout)
+	defer cancel()
+
 	qty := int(in.Quantity)
 	if qty <= 0 {
 		qty = 1
@@ -35,10 +45,13 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 
 	// 先原子扣库存（WHERE stock >= qty 行锁串行，防超卖）。这是唯一持锁点，
 	// 且成功路径无需任何前置 SELECT，避免在热点行上每请求多一次查询放大连接池等待。
-	result := l.svcCtx.Db.Model(&model.ShopItem{}).
+	result := l.svcCtx.Db.WithContext(ctx).Model(&model.ShopItem{}).
 		Where("id = ? AND is_active = ? AND stock >= ?", in.ItemId, true, qty).
 		UpdateColumn("stock", gorm.Expr("stock - ?", qty))
 	if result.Error != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, errorx.New(errorx.CodeFlashSaleTimeout)
+		}
 		return nil, errorx.NewErr(errorx.CodeDBError, result.Error)
 	}
 	if result.RowsAffected == 0 {
@@ -54,22 +67,25 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 		Name        string `gorm:"column:name"`
 		PricePoints int64  `gorm:"column:price_points"`
 	}
-	if err := l.svcCtx.Db.Model(&model.ShopItem{}).
+	if err := l.svcCtx.Db.WithContext(ctx).Model(&model.ShopItem{}).
 		Select("id", "name", "price_points").
 		Where("id = ?", in.ItemId).
 		First(&item).Error; err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, errorx.New(errorx.CodeFlashSaleTimeout)
+		}
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	cost := item.PricePoints * int64(qty)
 
 	// 扣积分（进程内 user 域）；失败回滚库存
-	_, err := NewDeductPointsLogic(l.ctx, l.svcCtx).DeductPoints(&hc.DeductPointsRequest{
+	_, err := NewDeductPointsLogic(ctx, l.svcCtx).DeductPoints(&hc.DeductPointsRequest{
 		UserId: in.UserId,
 		Points: cost,
 		Reason: "redeem",
 	})
 	if err != nil {
-		if rb := l.svcCtx.Db.Model(&model.ShopItem{}).
+		if rb := l.svcCtx.Db.WithContext(ctx).Model(&model.ShopItem{}).
 			Where("id = ?", in.ItemId).
 			UpdateColumn("stock", gorm.Expr("stock + ?", qty)); rb.Error != nil {
 			l.Logger.Errorf("rollback stock failed: %v", rb.Error)
@@ -86,12 +102,15 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 		OrderStatus: "completed",
 		ActivityID:  0,
 	}
-	if err := l.svcCtx.Db.Create(order).Error; err != nil {
+	if err := l.svcCtx.Db.WithContext(ctx).Create(order).Error; err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, errorx.New(errorx.CodeFlashSaleTimeout)
+		}
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
 	// 兑换进度上报（进程内 task 域，失败不阻塞主流程）
-	reportRedeemProgress(l.ctx, l.svcCtx, in.UserId, l.Logger)
+	reportRedeemProgress(ctx, l.svcCtx, in.UserId, l.Logger)
 
 	return &hc.RedeemResponse{Order: toOrderInfo(order)}, nil
 }
