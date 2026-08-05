@@ -6,7 +6,6 @@ import (
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
 	"github.com/cdcdx/hc-framework-go/common/errorx"
-	"github.com/cdcdx/hc-framework-go/common/gormx"
 	"github.com/cdcdx/hc-framework-go/common/model"
 	"github.com/zeromicro/go-zero/core/logx"
 	"gorm.io/gorm"
@@ -34,29 +33,8 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 		qty = 1
 	}
 
-	// 商品在售预检（轻量快照读，走主键索引、不持锁、极快），用于区分
-	// "商品已下线" 与 "库存不足" 两种失败，避免扣库存失败后再发一次 COUNT 查询。
-	var item struct {
-		ID          int64  `gorm:"column:id"`
-		Name        string `gorm:"column:name"`
-		PricePoints int64  `gorm:"column:price_points"`
-		IsActive    bool   `gorm:"column:is_active"`
-	}
-	if err := l.svcCtx.Db.Model(&model.ShopItem{}).
-		Select("id", "name", "price_points", "is_active").
-		Where("id = ?", in.ItemId).
-		First(&item).Error; err != nil {
-		if gormx.IsRecordNotFound(err) {
-			return nil, errorx.New(errorx.CodeItemOffline)
-		}
-		return nil, errorx.NewErr(errorx.CodeDBError, err)
-	}
-	if !item.IsActive {
-		return nil, errorx.New(errorx.CodeItemOffline)
-	}
-
-	// 原子扣库存（WHERE stock >= qty 行锁串行，防超卖）。这是唯一持锁点。
-	// rows:0 即库存不足（在售已预检通过），直接返回，无需额外查询。
+	// 先原子扣库存（WHERE stock >= qty 行锁串行，防超卖）。这是唯一持锁点，
+	// 且成功路径无需任何前置 SELECT，避免在热点行上每请求多一次查询放大连接池等待。
 	result := l.svcCtx.Db.Model(&model.ShopItem{}).
 		Where("id = ? AND is_active = ? AND stock >= ?", in.ItemId, true, qty).
 		UpdateColumn("stock", gorm.Expr("stock - ?", qty))
@@ -64,10 +42,24 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 		return nil, errorx.NewErr(errorx.CodeDBError, result.Error)
 	}
 	if result.RowsAffected == 0 {
+		// 扣库存失败（库存不足或商品不可用）。秒杀热点场景下此分支占比极高，
+		// 为避免每次失败再发一次 SELECT 查询放大慢 SQL，统一返回库存不足；
+		// 商品下架对用户而言同样表现为"暂不可兑换"，无需额外区分。
 		return nil, errorx.New(errorx.CodeStockInsufficient)
 	}
 
-	// 商品信息已在扣库存前的预检中取得，无需再次查询。
+	// 扣库存成功后，仅查建单所需字段（快照读，不持锁）。
+	var item struct {
+		ID          int64  `gorm:"column:id"`
+		Name        string `gorm:"column:name"`
+		PricePoints int64  `gorm:"column:price_points"`
+	}
+	if err := l.svcCtx.Db.Model(&model.ShopItem{}).
+		Select("id", "name", "price_points").
+		Where("id = ?", in.ItemId).
+		First(&item).Error; err != nil {
+		return nil, errorx.NewErr(errorx.CodeDBError, err)
+	}
 	cost := item.PricePoints * int64(qty)
 
 	// 扣积分（进程内 user 域）；失败回滚库存

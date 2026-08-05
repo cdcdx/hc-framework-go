@@ -113,8 +113,18 @@ func TestRedeem_ItemOffline(t *testing.T) {
 		ItemId:   itemID,
 		Quantity: 1,
 	})
-	if errorx.Code(err) != errorx.CodeItemOffline {
-		t.Fatalf("expected CodeItemOffline, got %d (%v)", errorx.Code(err), err)
+	// 下架商品不可兑换：不扣库存、返回非成功错误码（热点路径下不额外查询区分下线/售罄）。
+	if err == nil {
+		t.Fatal("expected error for offline item")
+	}
+	if errorx.Code(err) != errorx.CodeStockInsufficient {
+		t.Fatalf("expected CodeStockInsufficient, got %d (%v)", errorx.Code(err), err)
+	}
+	// 库存未被误扣
+	var item model.ShopItem
+	_ = svcCtx.Db.First(&item, itemID).Error
+	if item.Stock != 10 {
+		t.Fatalf("offline item stock should remain 10, got %d", item.Stock)
 	}
 }
 
