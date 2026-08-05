@@ -3,7 +3,9 @@ package mq
 import (
 	"context"
 	"sync"
+	"time"
 
+	"github.com/cdcdx/hc-framework-go/common/metrics"
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
@@ -52,12 +54,19 @@ func (p *memoryProducer) Send(ctx context.Context, topic, key string, value []by
 	p.broker.mu.RLock()
 	chs := p.broker.topics[topic]
 	p.broker.mu.RUnlock()
+	sent := false
 	for _, ch := range chs {
 		select {
 		case ch <- msg:
+			sent = true
 		default:
 			logx.WithContext(ctx).Errorf("[mq-memory] topic=%s buffer full, dropping message", topic)
 		}
+	}
+	if sent {
+		metrics.MQProduceTotal.WithLabelValues(topic, "ok").Inc()
+	} else {
+		metrics.MQProduceTotal.WithLabelValues(topic, "drop").Inc()
 	}
 	return nil
 }
@@ -103,8 +112,14 @@ func (c *memoryConsumer) Subscribe(ctx context.Context, topic string, handler Ha
 				if !ok {
 					return
 				}
-				if err := handler(ctx, msg); err != nil {
+				start := time.Now()
+				err := handler(ctx, msg)
+				metrics.MQConsumeDurationSeconds.WithLabelValues(topic).Observe(time.Since(start).Seconds())
+				if err != nil {
+					metrics.MQConsumeTotal.WithLabelValues(topic, "error").Inc()
 					logx.WithContext(ctx).Errorf("[mq-memory] handler error topic=%s: %v", topic, err)
+				} else {
+					metrics.MQConsumeTotal.WithLabelValues(topic, "ok").Inc()
 				}
 			}
 		}

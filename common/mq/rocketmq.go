@@ -2,11 +2,13 @@ package mq
 
 import (
 	"context"
+	"time"
 
 	"github.com/apache/rocketmq-client-go/v2"
 	"github.com/apache/rocketmq-client-go/v2/consumer"
 	"github.com/apache/rocketmq-client-go/v2/primitive"
 	"github.com/apache/rocketmq-client-go/v2/producer"
+	"github.com/cdcdx/hc-framework-go/common/metrics"
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
@@ -82,7 +84,13 @@ func (r *rocketmqProducer) send(ctx context.Context, topic, key string, value []
 }
 
 func (r *rocketmqProducer) Send(ctx context.Context, topic, key string, value []byte) error {
-	return r.send(ctx, topic, key, value)
+	err := r.send(ctx, topic, key, value)
+	if err != nil {
+		metrics.MQProduceTotal.WithLabelValues(topic, "error").Inc()
+	} else {
+		metrics.MQProduceTotal.WithLabelValues(topic, "ok").Inc()
+	}
+	return err
 }
 
 func (r *rocketmqProducer) SendAsync(ctx context.Context, topic, key string, value []byte) error {
@@ -146,15 +154,20 @@ func (r *rocketmqConsumer) Subscribe(ctx context.Context, topic string, handler 
 	err := r.c.Subscribe(t, consumer.MessageSelector{}, func(ctx context.Context, msgs ...*primitive.MessageExt) (consumer.ConsumeResult, error) {
 		for _, m := range msgs {
 			keys := m.GetKeys()
-			if err := handler(ctx, &Message{
+			start := time.Now()
+			hErr := handler(ctx, &Message{
 				Key:       keys,
 				Value:     m.Body,
 				Partition: int32(m.Queue.QueueId),
 				Offset:    m.CommitLogOffset,
-			}); err != nil {
-				logx.WithContext(ctx).Errorf("[mq-rocketmq] handler error topic=%s: %v", t, err)
-				return consumer.ConsumeRetryLater, err
+			})
+			metrics.MQConsumeDurationSeconds.WithLabelValues(t).Observe(time.Since(start).Seconds())
+			if hErr != nil {
+				metrics.MQConsumeTotal.WithLabelValues(t, "error").Inc()
+				logx.WithContext(ctx).Errorf("[mq-rocketmq] handler error topic=%s: %v", t, hErr)
+				return consumer.ConsumeRetryLater, hErr
 			}
+			metrics.MQConsumeTotal.WithLabelValues(t, "ok").Inc()
 		}
 		return consumer.ConsumeSuccess, nil
 	})

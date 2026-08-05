@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/cdcdx/hc-framework-go/common/metrics"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/zeromicro/go-zero/core/logx"
 )
@@ -111,7 +113,13 @@ func (r *rabbitmqProducer) publish(ctx context.Context, topic string, key string
 }
 
 func (r *rabbitmqProducer) Send(ctx context.Context, topic, key string, value []byte) error {
-	return r.publish(ctx, topic, key, value)
+	err := r.publish(ctx, topic, key, value)
+	if err != nil {
+		metrics.MQProduceTotal.WithLabelValues(topic, "error").Inc()
+	} else {
+		metrics.MQProduceTotal.WithLabelValues(topic, "ok").Inc()
+	}
+	return err
 }
 
 func (r *rabbitmqProducer) SendAsync(ctx context.Context, topic, key string, value []byte) error {
@@ -199,11 +207,17 @@ func (r *rabbitmqConsumer) Subscribe(ctx context.Context, topic string, handler 
 				if !ok {
 					return
 				}
-				if err := handler(ctx, &Message{
+				start := time.Now()
+				hErr := handler(ctx, &Message{
 					Key:   d.MessageId,
 					Value: d.Body,
-				}); err != nil {
-					logx.WithContext(ctx).Errorf("[mq-rabbitmq] handler error topic=%s: %v", topic, err)
+				})
+				metrics.MQConsumeDurationSeconds.WithLabelValues(topic).Observe(time.Since(start).Seconds())
+				if hErr != nil {
+					metrics.MQConsumeTotal.WithLabelValues(topic, "error").Inc()
+					logx.WithContext(ctx).Errorf("[mq-rabbitmq] handler error topic=%s: %v", topic, hErr)
+				} else {
+					metrics.MQConsumeTotal.WithLabelValues(topic, "ok").Inc()
 				}
 			}
 		}

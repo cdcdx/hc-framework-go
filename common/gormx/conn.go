@@ -191,27 +191,83 @@ func (l *ignoreNotFoundLogger) Trace(ctx context.Context, begin time.Time, fc fu
 	l.delegate.Trace(ctx, begin, fc, err)
 }
 
-// enableTableMetrics 为 gorm.DB 注册 After 回调，按 db+table+operation 维度
-// 计数每次表级操作，写入 Prometheus Counter db_operations_total。
+// enableTableMetrics 为 gorm.DB 注册 Before/After 回调对，按 db+table+operation 维度
+// 计数每次表级操作、记录耗时和错误，写入 Prometheus Counter/Histogram。
 // 与连接池指标一样在 OpenWithPool 内自动启用，调用方无需额外操作。
 func enableTableMetrics(db *gorm.DB, label string) {
-	// 回调工厂：用闭包捕获 label，避免每次回调里用反射查 db 名。
-	inc := func(op string) func(*gorm.DB) {
-		return func(d *gorm.DB) {
-			table := d.Statement.Table
-			if table == "" {
-				table = "_unknown"
-			}
-			metrics.DBOperationsTotal.WithLabelValues(label, table, op).Inc()
-		}
+	ops := []struct {
+		name string
+		op   string
+	}{
+		{"query", "select"},
+		{"create", "insert"},
+		{"update", "update"},
+		{"delete", "delete"},
+		{"raw", "raw"},
 	}
 
-	// 为 5 类操作注册 After 回调：回调在 SQL 执行后触发，不阻塞热路径。
-	_ = db.Callback().Query().After("gorm:after_query").Register("metrics:table_query", inc("select"))
-	_ = db.Callback().Create().After("gorm:after_create").Register("metrics:table_create", inc("insert"))
-	_ = db.Callback().Update().After("gorm:after_update").Register("metrics:table_update", inc("update"))
-	_ = db.Callback().Delete().After("gorm:after_delete").Register("metrics:table_delete", inc("delete"))
-	_ = db.Callback().Raw().After("gorm:raw").Register("metrics:table_raw", inc("raw"))
+	for _, o := range ops {
+		name, op := o.name, o.op
+
+		// 按操作类型注册 Before/After 回调对。
+		// Before：记录开始时间戳到 db 实例（线程安全，gorm 每次操作创建新 session）。
+		// After：计数 + 延迟 + 错误。
+		switch name {
+		case "query":
+			db.Callback().Query().Before("gorm:before_query").Register("metrics:before_query", func(d *gorm.DB) {
+				d.InstanceSet("metrics_start", time.Now())
+			})
+			db.Callback().Query().After("gorm:after_query").Register("metrics:after_query", func(d *gorm.DB) {
+				recordTableMetrics(d, label, op)
+			})
+		case "create":
+			db.Callback().Create().Before("gorm:before_create").Register("metrics:before_create", func(d *gorm.DB) {
+				d.InstanceSet("metrics_start", time.Now())
+			})
+			db.Callback().Create().After("gorm:after_create").Register("metrics:after_create", func(d *gorm.DB) {
+				recordTableMetrics(d, label, op)
+			})
+		case "update":
+			db.Callback().Update().Before("gorm:before_update").Register("metrics:before_update", func(d *gorm.DB) {
+				d.InstanceSet("metrics_start", time.Now())
+			})
+			db.Callback().Update().After("gorm:after_update").Register("metrics:after_update", func(d *gorm.DB) {
+				recordTableMetrics(d, label, op)
+			})
+		case "delete":
+			db.Callback().Delete().Before("gorm:before_delete").Register("metrics:before_delete", func(d *gorm.DB) {
+				d.InstanceSet("metrics_start", time.Now())
+			})
+			db.Callback().Delete().After("gorm:after_delete").Register("metrics:after_delete", func(d *gorm.DB) {
+				recordTableMetrics(d, label, op)
+			})
+		case "raw":
+			db.Callback().Raw().Before("gorm:before_raw").Register("metrics:before_raw", func(d *gorm.DB) {
+				d.InstanceSet("metrics_start", time.Now())
+			})
+			db.Callback().Raw().After("gorm:after_raw").Register("metrics:after_raw", func(d *gorm.DB) {
+				recordTableMetrics(d, label, op)
+			})
+		}
+	}
+}
+
+// recordTableMetrics 记录单次表操作的三维指标：计数 + 延迟 + 错误。
+func recordTableMetrics(d *gorm.DB, label, op string) {
+	table := d.Statement.Table
+	if table == "" {
+		table = "_unknown"
+	}
+	metrics.DBOperationsTotal.WithLabelValues(label, table, op).Inc()
+
+	if start, ok := d.InstanceGet("metrics_start"); ok {
+		metrics.DBOperationDurationSeconds.WithLabelValues(label, table, op).
+			Observe(time.Since(start.(time.Time)).Seconds())
+	}
+
+	if d.Error != nil {
+		metrics.DBOperationErrorsTotal.WithLabelValues(label, table, op).Inc()
+	}
 }
 
 // EnableTableMetrics 为已有的 *gorm.DB 手动启用表操作指标。

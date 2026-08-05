@@ -67,3 +67,88 @@ var DBOperationsTotal = promauto.NewCounterVec(
 	},
 	[]string{"db", "table", "operation"},
 )
+
+// DBOperationDurationSeconds 数据库操作耗时（Histogram），按 db + table + operation 区分。
+// 用于发现慢查询热点表，配合 db_operations_total 计算平均延迟。
+var DBOperationDurationSeconds = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Name:    "db_operation_duration_seconds",
+		Help:    "数据库单次操作耗时（秒），按 db + table + operation 区分。",
+		Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+	},
+	[]string{"db", "table", "operation"},
+)
+
+// DBOperationErrorsTotal 数据库操作错误计数，按 db + table + operation 区分。
+var DBOperationErrorsTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "db_operation_errors_total",
+		Help: "数据库操作错误总数，按 db + table + operation 区分。",
+	},
+	[]string{"db", "table", "operation"},
+)
+
+// CacheHitTotal 缓存命中计数，按 store (l1/l2) 区分。
+var CacheHitTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "cache_hit_total",
+		Help: "缓存命中次数，按 store(l1/l2) 区分。",
+	},
+	[]string{"store"},
+)
+
+// CacheMissTotal 缓存未命中计数，按 store (l1/l2) 区分。
+var CacheMissTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "cache_miss_total",
+		Help: "缓存未命中次数，按 store(l1/l2) 区分。",
+	},
+	[]string{"store"},
+)
+
+// CacheOperationDurationSeconds L2 缓存操作耗时（Histogram），按 operation (get/set/del) 区分。
+// 仅统计 L2（Redis/Valkey）网络耗时；L1（Ristretto 本地）为内存操作不计。
+var CacheOperationDurationSeconds = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Name:    "cache_operation_duration_seconds",
+		Help:    "L2 缓存操作耗时（秒），按 operation 区分。",
+		Buckets: []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
+	},
+	[]string{"operation"},
+)
+
+// CacheBloomRejectTotal 布隆过滤器拒绝次数（缓存穿透保护）。
+var CacheBloomRejectTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "cache_bloom_reject_total",
+		Help: "布隆过滤器拒绝次数（key 一定不存在，直接返回避免穿透）。",
+	},
+)
+
+// MQProduceTotal 消息生产计数，按 topic + result (ok/error/drop) 区分。
+var MQProduceTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "mq_produce_total",
+		Help: "消息生产总数，按 topic + result(ok/error/drop) 区分。",
+	},
+	[]string{"topic", "result"},
+)
+
+// MQConsumeTotal 消息消费计数，按 topic + result (ok/error) 区分。
+var MQConsumeTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "mq_consume_total",
+		Help: "消息消费总数，按 topic + result(ok/error) 区分。",
+	},
+	[]string{"topic", "result"},
+)
+
+// MQConsumeDurationSeconds 消息消费耗时（Histogram），按 topic 区分。
+var MQConsumeDurationSeconds = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Name:    "mq_consume_duration_seconds",
+		Help:    "消息消费耗时（秒），按 topic 区分。",
+		Buckets: prometheus.DefBuckets,
+	},
+	[]string{"topic"},
+)

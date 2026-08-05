@@ -2,7 +2,9 @@ package mq
 
 import (
 	"context"
+	"time"
 
+	"github.com/cdcdx/hc-framework-go/common/metrics"
 	"github.com/segmentio/kafka-go"
 	"github.com/zeromicro/go-zero/core/logx"
 )
@@ -41,11 +43,17 @@ func newKafkaProducer(cfg Config) *kafkaProducer {
 }
 
 func (p *kafkaProducer) Send(ctx context.Context, topic, key string, value []byte) error {
-	return p.writer.WriteMessages(ctx, kafka.Message{
+	err := p.writer.WriteMessages(ctx, kafka.Message{
 		Topic: topic,
 		Key:   []byte(key),
 		Value: value,
 	})
+	if err != nil {
+		metrics.MQProduceTotal.WithLabelValues(topic, "error").Inc()
+	} else {
+		metrics.MQProduceTotal.WithLabelValues(topic, "ok").Inc()
+	}
+	return err
 }
 
 func (p *kafkaProducer) SendAsync(ctx context.Context, topic, key string, value []byte) error {
@@ -104,22 +112,28 @@ func (c *kafkaConsumer) Subscribe(ctx context.Context, topic string, handler Han
 				return
 			default:
 			}
-			msg, err := c.reader.FetchMessage(ctx)
-			if err != nil {
-				if err.Error() == "EOF" || err.Error() == "context canceled" {
-					return
-				}
-				logx.WithContext(ctx).Errorf("[mq-kafka] fetch error: %v", err)
-				continue
+		msg, err := c.reader.FetchMessage(ctx)
+		if err != nil {
+			if err.Error() == "EOF" || err.Error() == "context canceled" {
+				return
 			}
-			if err := handler(ctx, &Message{
-				Key:       string(msg.Key),
-				Value:     msg.Value,
-				Partition: int32(msg.Partition),
-				Offset:    msg.Offset,
-			}); err != nil {
-				logx.WithContext(ctx).Errorf("[mq-kafka] handler error topic=%s: %v", topic, err)
-			}
+			logx.WithContext(ctx).Errorf("[mq-kafka] fetch error: %v", err)
+			continue
+		}
+		start := time.Now()
+		hErr := handler(ctx, &Message{
+			Key:       string(msg.Key),
+			Value:     msg.Value,
+			Partition: int32(msg.Partition),
+			Offset:    msg.Offset,
+		})
+		metrics.MQConsumeDurationSeconds.WithLabelValues(topic).Observe(time.Since(start).Seconds())
+		if hErr != nil {
+			metrics.MQConsumeTotal.WithLabelValues(topic, "error").Inc()
+			logx.WithContext(ctx).Errorf("[mq-kafka] handler error topic=%s: %v", topic, hErr)
+		} else {
+			metrics.MQConsumeTotal.WithLabelValues(topic, "ok").Inc()
+		}
 			if err := c.reader.CommitMessages(ctx, msg); err != nil {
 				logx.WithContext(ctx).Errorf("[mq-kafka] commit error: %v", err)
 			}

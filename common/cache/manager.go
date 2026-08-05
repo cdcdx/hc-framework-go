@@ -13,6 +13,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/cdcdx/hc-framework-go/common/metrics"
 	"github.com/zeromicro/go-zero/core/logx"
 )
 
@@ -149,15 +150,23 @@ func (m *Manager) Get(ctx context.Context, key string) ([]byte, error) {
 	}
 	// L1
 	if val, err := m.l1.Get(ctx, key); err == nil && val != nil {
+		metrics.CacheHitTotal.WithLabelValues("l1").Inc()
 		return val, nil
 	}
+	metrics.CacheMissTotal.WithLabelValues("l1").Inc()
+
 	// L2
 	if m.l2 != nil {
-		if val, err := m.l2.Get(ctx, key); err == nil && val != nil {
+		start := time.Now()
+		val, err := m.l2.Get(ctx, key)
+		metrics.CacheOperationDurationSeconds.WithLabelValues("get").Observe(time.Since(start).Seconds())
+		if err == nil && val != nil {
+			metrics.CacheHitTotal.WithLabelValues("l2").Inc()
 			// 回填 L1（失败不影响返回值）
 			_ = m.l1.Set(ctx, key, val, m.config.L1.DefaultTTL)
 			return val, nil
 		}
+		metrics.CacheMissTotal.WithLabelValues("l2").Inc()
 	}
 	return nil, nil
 }
@@ -172,9 +181,11 @@ func (m *Manager) Set(ctx context.Context, key string, value []byte, ttl time.Du
 		return err
 	}
 	if m.l2 != nil {
+		start := time.Now()
 		if err := m.l2.Set(ctx, key, value, ttl); err != nil {
 			logx.Errorf("cache: L2 set failed for %s: %v", key, err)
 		}
+		metrics.CacheOperationDurationSeconds.WithLabelValues("set").Observe(time.Since(start).Seconds())
 	}
 	return nil
 }
@@ -186,9 +197,11 @@ func (m *Manager) Delete(ctx context.Context, key string) error {
 	}
 	_ = m.l1.Delete(ctx, key)
 	if m.l2 != nil {
+		start := time.Now()
 		if err := m.l2.Delete(ctx, key); err != nil {
 			logx.Errorf("cache: L2 delete failed for %s: %v", key, err)
 		}
+		metrics.CacheOperationDurationSeconds.WithLabelValues("del").Observe(time.Since(start).Seconds())
 	}
 	return nil
 }
@@ -200,6 +213,7 @@ func (m *Manager) Exists(ctx context.Context, key string) bool {
 		return false
 	}
 	if !m.bloom.MightContain(key) {
+		metrics.CacheBloomRejectTotal.Inc()
 		return false
 	}
 	val, err := m.Get(ctx, key)
