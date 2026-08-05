@@ -56,3 +56,14 @@ var DBPoolWaitCount = promauto.NewCounterVec(
 	},
 	[]string{"db"},
 )
+
+// DBOperationsTotal 数据库表级操作计数，按 db + table + operation 三维区分。
+// operation 取值: select / insert / update / delete / raw。
+// 用于快速定位热点表、排查慢查询表分布、评估分桶/分片优先级。
+var DBOperationsTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "db_operations_total",
+		Help: "数据库表级操作总数，按 db + table + operation 区分。",
+	},
+	[]string{"db", "table", "operation"},
+)

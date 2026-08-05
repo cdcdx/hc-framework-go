@@ -111,6 +111,7 @@ func OpenWithPool(driver, dsn string, pool PoolConfig) (*gorm.DB, error) {
 		label = "business"
 	}
 	startPoolMetrics(sqlDB, label)
+	enableTableMetrics(db, label)
 
 	return db, nil
 }
@@ -188,4 +189,34 @@ func (l *ignoreNotFoundLogger) Trace(ctx context.Context, begin time.Time, fc fu
 		return
 	}
 	l.delegate.Trace(ctx, begin, fc, err)
+}
+
+// enableTableMetrics 为 gorm.DB 注册 After 回调，按 db+table+operation 维度
+// 计数每次表级操作，写入 Prometheus Counter db_operations_total。
+// 与连接池指标一样在 OpenWithPool 内自动启用，调用方无需额外操作。
+func enableTableMetrics(db *gorm.DB, label string) {
+	// 回调工厂：用闭包捕获 label，避免每次回调里用反射查 db 名。
+	inc := func(op string) func(*gorm.DB) {
+		return func(d *gorm.DB) {
+			table := d.Statement.Table
+			if table == "" {
+				table = "_unknown"
+			}
+			metrics.DBOperationsTotal.WithLabelValues(label, table, op).Inc()
+		}
+	}
+
+	// 为 5 类操作注册 After 回调：回调在 SQL 执行后触发，不阻塞热路径。
+	_ = db.Callback().Query().After("gorm:after_query").Register("metrics:table_query", inc("select"))
+	_ = db.Callback().Create().After("gorm:after_create").Register("metrics:table_create", inc("insert"))
+	_ = db.Callback().Update().After("gorm:after_update").Register("metrics:table_update", inc("update"))
+	_ = db.Callback().Delete().After("gorm:after_delete").Register("metrics:table_delete", inc("delete"))
+	_ = db.Callback().Raw().After("gorm:raw").Register("metrics:table_raw", inc("raw"))
+}
+
+// EnableTableMetrics 为已有的 *gorm.DB 手动启用表操作指标。
+// 大多数情况下不需要手动调用——OpenWithPool 已内置启用。
+// 仅当通过 gorm.Open 等非 OpenWithPool 路径获取 db 时才需调用。
+func EnableTableMetrics(db *gorm.DB, label string) {
+	enableTableMetrics(db, label)
 }
