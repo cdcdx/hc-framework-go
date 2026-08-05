@@ -12,6 +12,8 @@ package cache
 import (
 	"context"
 	"time"
+
+	"github.com/zeromicro/go-zero/core/logx"
 )
 
 // Item 缓存值
@@ -99,7 +101,15 @@ func New(config Config) *Manager {
 
 	// L1: Ristretto 本地缓存
 	if config.L1.Enabled {
-		m.l1 = newRistrettoStore(config.L1)
+		l1, err := newRistrettoStore(config.L1)
+		if err != nil {
+			// L1 初始化失败不致命：降级为 nilStore（仅 L1 不可用），
+			// 避免进程因配置/资源问题直接崩溃。
+			logx.Errorf("cache: L1 init failed, fallback to no-op L1: %v", err)
+			m.l1 = &nilStore{}
+		} else {
+			m.l1 = l1
+		}
 	} else {
 		m.l1 = &nilStore{}
 	}

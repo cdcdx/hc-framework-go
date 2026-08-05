@@ -15,7 +15,8 @@ type ristrettoStore struct {
 
 // newRistrettoStore 创建 Ristretto 本地缓存实例。
 // 参数来自 L1Config，NumCounters 建议为 MaxCost 的 10 倍。
-func newRistrettoStore(cfg L1Config) *ristrettoStore {
+// 初始化失败时返回 error（由调用方降级为 nilStore），避免进程直接崩溃。
+func newRistrettoStore(cfg L1Config) (*ristrettoStore, error) {
 	if cfg.NumCounters <= 0 {
 		cfg.NumCounters = 10_000_000
 	}
@@ -32,9 +33,9 @@ func newRistrettoStore(cfg L1Config) *ristrettoStore {
 		BufferItems: cfg.BufferItems,
 	})
 	if err != nil {
-		panic(fmt.Sprintf("ristretto: %v", err))
+		return nil, fmt.Errorf("ristretto: %w", err)
 	}
-	return &ristrettoStore{cache: c}
+	return &ristrettoStore{cache: c}, nil
 }
 
 func (s *ristrettoStore) Get(ctx context.Context, key string) ([]byte, error) {
