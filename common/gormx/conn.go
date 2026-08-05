@@ -45,10 +45,14 @@ func Open(driver, dsn string) (*gorm.DB, error) {
 // defaultMaxOpenConns / defaultMaxIdleConns 是连接池的兜底上限。
 // 当上层未显式配置 MaxOpenConns（即 <=0）时采用，避免驱动默认值（mysql 为 0 = 无限制）
 // 在高并发下无限创建连接，打爆数据库 max_connections（Error 1040 Too many connections）。
-// sqlite 默认仍无限制（单文件库无服务端连接数约束，且限制反而影响并发读写）。
+// 取值保守：单进程常配置 business/user/monitor/log 等多个库，各库连接数相加须低于
+// MySQL 默认 max_connections(151)，否则多库总和直接触发 Error 1040。
 const (
-	defaultMaxOpenConns = 50
+	defaultMaxOpenConns = 20
 	defaultMaxIdleConns = 10
+	// hardMaxOpenConns 是单库连接池的绝对上限，防止配置值过大（如 200）单实例就打爆 DB。
+	// 最终生效值 = min(配置值, hardMaxOpenConns)。
+	hardMaxOpenConns = 100
 )
 
 // OpenWithPool 在 Open 基础上应用连接池限制，并后台采集 db_pool_utilization /
@@ -88,6 +92,10 @@ func OpenWithPool(driver, dsn string, pool PoolConfig) (*gorm.DB, error) {
 	//   是 Error 1040 Too many connections 的根因）。
 	// - sqlite 单文件库无服务端连接数约束，仅当显式配置 >0 时应用，否则保留默认（不限）。
 	maxOpen, maxIdle := resolvePoolDefaults(driver, pool)
+	// 单库连接池绝对上限保护：防止配置值过大单实例直接打爆数据库 max_connections。
+	if maxOpen > hardMaxOpenConns {
+		maxOpen = hardMaxOpenConns
+	}
 	if maxOpen > 0 {
 		sqlDB.SetMaxOpenConns(maxOpen)
 	}

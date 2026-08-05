@@ -34,25 +34,29 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 		qty = 1
 	}
 
-	// 商品在售校验：仅查询建单所需字段（id/name/price_points），避免 SELECT * 拉取无用列。
+	// 商品在售预检（轻量快照读，走主键索引、不持锁、极快），用于区分
+	// "商品已下线" 与 "库存不足" 两种失败，避免扣库存失败后再发一次 COUNT 查询。
 	var item struct {
 		ID          int64  `gorm:"column:id"`
 		Name        string `gorm:"column:name"`
 		PricePoints int64  `gorm:"column:price_points"`
+		IsActive    bool   `gorm:"column:is_active"`
 	}
-	err := l.svcCtx.Db.Model(&model.ShopItem{}).
-		Select("id", "name", "price_points").
-		Where("id = ? AND is_active = ?", in.ItemId, true).
-		First(&item).Error
-	if gormx.IsRecordNotFound(err) {
-		return nil, errorx.New(errorx.CodeItemOffline)
-	}
-	if err != nil {
+	if err := l.svcCtx.Db.Model(&model.ShopItem{}).
+		Select("id", "name", "price_points", "is_active").
+		Where("id = ?", in.ItemId).
+		First(&item).Error; err != nil {
+		if gormx.IsRecordNotFound(err) {
+			return nil, errorx.New(errorx.CodeItemOffline)
+		}
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
-	cost := item.PricePoints * int64(qty)
+	if !item.IsActive {
+		return nil, errorx.New(errorx.CodeItemOffline)
+	}
 
-	// 原子扣库存（WHERE stock >= qty 行锁串行，防超卖）
+	// 原子扣库存（WHERE stock >= qty 行锁串行，防超卖）。这是唯一持锁点。
+	// rows:0 即库存不足（在售已预检通过），直接返回，无需额外查询。
 	result := l.svcCtx.Db.Model(&model.ShopItem{}).
 		Where("id = ? AND is_active = ? AND stock >= ?", in.ItemId, true, qty).
 		UpdateColumn("stock", gorm.Expr("stock - ?", qty))
@@ -63,8 +67,11 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 		return nil, errorx.New(errorx.CodeStockInsufficient)
 	}
 
+	// 商品信息已在扣库存前的预检中取得，无需再次查询。
+	cost := item.PricePoints * int64(qty)
+
 	// 扣积分（进程内 user 域）；失败回滚库存
-	_, err = NewDeductPointsLogic(l.ctx, l.svcCtx).DeductPoints(&hc.DeductPointsRequest{
+	_, err := NewDeductPointsLogic(l.ctx, l.svcCtx).DeductPoints(&hc.DeductPointsRequest{
 		UserId: in.UserId,
 		Points: cost,
 		Reason: "redeem",

@@ -97,3 +97,29 @@ func TestIsRecordNotFound(t *testing.T) {
 		t.Fatal("无关错误不应被识别为 record-not-found")
 	}
 }
+
+// TestOpenWithPool_HardCap 验证单库连接池绝对上限保护，防止配置值过大单实例打爆 DB。
+func TestOpenWithPool_HardCap(t *testing.T) {
+	cases := []struct {
+		in   int
+		want int
+		desc string
+	}{
+		{200, hardMaxOpenConns, "200 应被压到硬上限"},
+		{100, hardMaxOpenConns, "正好等于硬上限保留"},
+		{50, 50, "50 不超上限保留"},
+	}
+	for _, c := range cases {
+		db, err := OpenWithPool("sqlite", ":memory:", PoolConfig{
+			MaxOpenConns: c.in,
+			Label:        "test",
+		})
+		if err != nil {
+			t.Fatalf("%s: OpenWithPool: %v", c.desc, err)
+		}
+		sqlDB, _ := db.DB()
+		if st := sqlDB.Stats(); st.MaxOpenConnections != c.want {
+			t.Errorf("%s: 期望 MaxOpenConnections=%d 实际 %d", c.desc, c.want, st.MaxOpenConnections)
+		}
+	}
+}
