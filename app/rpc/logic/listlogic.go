@@ -25,7 +25,7 @@ func NewListLogic(ctx context.Context, svcCtx *svc.ServiceContext) *ListLogic {
 }
 
 func (l *ListLogic) List(in *hc.TaskListRequest) (*hc.TaskListResponse, error) {
-	tasks, err := loadTaskInfos(l.svcCtx.Db, in.UserId)
+	tasks, err := loadTaskInfos(l.svcCtx, in.UserId)
 	if err != nil {
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}

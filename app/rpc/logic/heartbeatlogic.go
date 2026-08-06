@@ -44,15 +44,21 @@ func (l *HeartbeatLogic) Heartbeat(in *hc.IdleHeartbeatRequest) (*hc.Empty, erro
 	}
 
 	now := time.Now()
-	// 心跳超时（超过阈值未续命）：结算为 timeout，需重新 start
-	if rec.LastHeartbeatAt != nil && now.Sub(*rec.LastHeartbeatAt) > 5*time.Minute {
-		if _, err := settle(l.ctx, l.svcCtx, &rec, *rec.LastHeartbeatAt, model.IdleStatusTimeout); err != nil {
+	// 心跳超时（超过阈值未续命）：结算为 timeout，需重新 start。
+	// 超时判定的时间源优先 Redis（心跳续期 key），缺失时回退 DB 的 last_heartbeat_at。
+	timeout := time.Duration(l.svcCtx.Config.Idle.TimeoutMinutes) * time.Minute
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	if hb := l.svcCtx.LastHeartbeat(l.ctx, in.DeviceId, rec.LastHeartbeatAt); hb != nil && now.Sub(*hb) > timeout {
+		if _, err := settle(l.ctx, l.svcCtx, &rec, *hb, model.IdleStatusTimeout); err != nil {
 			return nil, err
 		}
 		return nil, errorx.New(errorx.CodeHeartbeatTimeout)
 	}
 
-	if err := l.svcCtx.Db.Model(&rec).UpdateColumn("last_heartbeat_at", now).Error; err != nil {
+	// 续期心跳：有 Redis 则只写 Redis（不落库），否则回退写 DB。
+	if err := l.svcCtx.TouchHeartbeat(l.ctx, &rec, in.DeviceId, now); err != nil {
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 	return &hc.Empty{}, nil

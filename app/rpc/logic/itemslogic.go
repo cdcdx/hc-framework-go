@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/cdcdx/hc-framework-go/app/rpc/hc"
 	"github.com/cdcdx/hc-framework-go/app/rpc/svc"
@@ -45,7 +46,7 @@ func (l *ItemsLogic) Items(in *hc.ShopItemsRequest) (*hc.ShopItemsResponse, erro
 		cacheKey := fmt.Sprintf("shop:items:default:%d", limit)
 		if cached, err := l.svcCtx.CachedGet(l.ctx, cacheKey, func(ctx context.Context) ([]byte, error) {
 			return l.loadItemsAndMarshal(limit, "", 0)
-		}); err == nil && cached != nil {
+		}, 60*time.Second); err == nil && cached != nil {
 			var resp hc.ShopItemsResponse
 			if err := json.Unmarshal(cached, &resp); err == nil {
 				return &resp, nil

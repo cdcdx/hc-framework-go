@@ -49,14 +49,20 @@ func newTestSvc(t *testing.T) *svc.ServiceContext {
 func seedUser(t *testing.T, svcCtx *svc.ServiceContext, userID string, balance int64) {
 	t.Helper()
 	u := model.User{
-		UserID:        userID,
-		Username:      userID,
-		Email:         userID + "@x.com",
-		PointsBalance: balance,
-		Status:        "active",
+		UserID:   userID,
+		Username: userID,
+		Email:    userID + "@x.com",
+		Status:   "active",
 	}
+	// 显式创建后再用 UpdateColumn 精确置余额：绕过 GORM 对零值的跳过
+	// 以及模型字段的 default:1000，确保测试得到的余额与入参一致。
 	if err := svcCtx.Db.Create(&u).Error; err != nil {
 		t.Fatalf("seed user: %v", err)
+	}
+	if err := svcCtx.Db.Model(&model.User{}).
+		Where("user_id = ?", userID).
+		UpdateColumn("points_balance", balance).Error; err != nil {
+		t.Fatalf("seed balance: %v", err)
 	}
 }
 

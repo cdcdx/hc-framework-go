@@ -14,6 +14,7 @@ package mq
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // 适配器公共错误。
@@ -112,6 +113,10 @@ type RabbitMQConfig struct {
 type MemoryConfig struct {
 	// BufferSize 通道缓冲大小，默认 1024。
 	BufferSize int
+	// MaxRetries 单条消息消费失败后的最大重试次数（默认 3，0 表示不重试）。
+	MaxRetries int
+	// RetryDelay 首次重试延迟（默认 50ms，之后指数退避，上限 500ms）。
+	RetryDelay time.Duration
 }
 
 // Config 消息队列配置。

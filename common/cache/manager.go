@@ -227,3 +227,12 @@ func (m *Manager) Close() error {
 	}
 	return m.l2.Close()
 }
+
+// DefaultTTL 返回 L1 默认 TTL，供 CachedGet 在调用方未显式指定 ttl 时回退使用，
+// 避免向 L2(Redis) 写入永久 key。
+func (m *Manager) DefaultTTL() time.Duration {
+	if m == nil {
+		return 0
+	}
+	return m.config.L1.DefaultTTL
+}

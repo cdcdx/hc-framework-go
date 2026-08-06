@@ -2,6 +2,7 @@ package logic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -149,34 +150,62 @@ func toFlashActivity(a *model.ShopFlashActivity) *hc.FlashActivityInfo {
 	return info
 }
 
-// reportRedeemProgress 上报兑换相关任务进度（进程内调用，失败仅日志）。
-// redeemlogic 和 flashredeemlogic 共用。
+// reportRedeemProgress 上报兑换相关任务进度。
+// 异步化：向 MQ 投递 task_progress 事件，由后台消费者（ServiceContext.handleTaskProgress）
+// 解耦处理，避免兑换主链路同步执行 3×(查Task+查/写Progress) 的 DB 开销。
+// MQ 禁用时（noopProducer）退化为同步调用，行为与改造前一致。
 func reportRedeemProgress(ctx context.Context, svcCtx *svc.ServiceContext, userID string, logger logx.Logger) {
 	for _, key := range []string{
 		model.TaskKeyDailyRedeem1,
 		model.TaskKeyWeeklyRedeem3,
 		model.TaskKeyAchieveRedeem100,
 	} {
-		if _, err := NewReportProgressLogic(ctx, svcCtx).ReportProgress(&hc.ReportProgressRequest{
-			UserId:  userID,
-			TaskKey: key,
-			Delta:   1,
-		}); err != nil {
-			logger.Errorf("report task progress %s failed: %v", key, err)
+		// 同步路径（MQ 未启用）：保留原行为，保证功能可用。
+		if svcCtx.MQProducer == nil {
+			if _, err := NewReportProgressLogic(ctx, svcCtx).ReportProgress(&hc.ReportProgressRequest{
+				UserId:  userID,
+				TaskKey: key,
+				Delta:   1,
+			}); err != nil {
+				logger.Errorf("report task progress %s failed: %v", key, err)
+			}
+			continue
+		}
+		// 异步路径：投递事件，fire-and-forget（MQ 内部已做缓冲/丢弃策略）。
+		payload, err := json.Marshal(svc.TaskProgressEvent{UserID: userID, TaskKey: key, Delta: 1})
+		if err != nil {
+			logger.Errorf("marshal task progress %s failed: %v", key, err)
+			continue
+		}
+		if err := svcCtx.Publish(ctx, "task_progress", userID, payload); err != nil {
+			logger.Errorf("publish task progress %s failed: %v", key, err)
 		}
 	}
 }
 
 // loadTaskInfos 加载活跃任务列表并关联用户进度，转换为 rpc TaskInfo 列表。
 // listlogic 和 progresslogic 共用，消除重复查询与组装逻辑。
-func loadTaskInfos(db *gorm.DB, userID string) ([]*hc.TaskInfo, error) {
+// 任务定义（tasks）极少变动，使用缓存（key tasks:active，TTL 60s）避免每次全表扫描；
+// 用户进度（user_task_progress）实时查询（已合并为单条 WHERE user_id=?）。
+func loadTaskInfos(svcCtx *svc.ServiceContext, userID string) ([]*hc.TaskInfo, error) {
 	var tasks []model.Task
-	if err := db.Where("is_active = ?", true).Order("id ASC").Find(&tasks).Error; err != nil {
+	cacheKey := "tasks:active"
+	cached, err := svcCtx.CachedGet(context.Background(), cacheKey, func(ctx context.Context) ([]byte, error) {
+		var ts []model.Task
+		if err := svcCtx.Db.Where("is_active = ?", true).Order("id ASC").Find(&ts).Error; err != nil {
+			return nil, err
+		}
+		return json.Marshal(ts)
+	}, 60*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(cached, &tasks); err != nil {
 		return nil, err
 	}
 
 	var pros []model.UserTaskProgress
-	if err := db.Where("user_id = ?", userID).Find(&pros).Error; err != nil {
+	if err := svcCtx.Db.Where("user_id = ?", userID).Find(&pros).Error; err != nil {
 		return nil, err
 	}
 	proMap := make(map[int64]*model.UserTaskProgress, len(pros))

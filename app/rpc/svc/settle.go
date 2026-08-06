@@ -155,7 +155,7 @@ func reportIdleProgress(ctx context.Context, svcCtx *ServiceContext, userID stri
 		}
 		if err := svcCtx.Db.WithContext(ctx).Model(&model.UserTaskProgress{}).
 			Where("user_id = ? AND task_id = ?", userID, task.ID).
-			UpdateColumn("progress", gorm.Expr("progress + ?", delta)).Error; err != nil {
+			UpdateColumn("current_progress", gorm.Expr("current_progress + ?", delta)).Error; err != nil {
 			logx.WithContext(ctx).Debugf("[settle] report progress %s delta=%d failed: %v", key, delta, err)
 		}
 	}

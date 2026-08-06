@@ -56,5 +56,9 @@ func (l *DeductPointsLogic) DeductPoints(in *hc.DeductPointsRequest) (*hc.Deduct
 		Pluck("points_balance", &balance).Error; err != nil {
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
+	// 余额已变更，失效缓存（短 TTL 兜底，这里主动失效保证读一致性）
+	if l.svcCtx.Cache != nil {
+		_ = l.svcCtx.Cache.Delete(l.ctx, pointsBalanceKey(in.UserId))
+	}
 	return &hc.DeductPointsResponse{UserId: in.UserId, PointsBalance: balance}, nil
 }

@@ -129,6 +129,13 @@ func (l *FlashRedeemLogic) FlashRedeem(in *hc.FlashRedeemRequest) (*hc.RedeemRes
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
+	// 秒杀成功会改变活动 sold_qty / 实时状态，主动失效活动列表缓存（短 TTL 兜底）。
+	if l.svcCtx.Cache != nil {
+		l.svcCtx.InvalidateFlashActivitiesCache(ctx)
+		// 同时失效商品列表缓存：抢购会扣减关联商品库存，避免下单后列表仍显示旧库存。
+		InvalidateItemsCache(l.svcCtx)
+	}
+
 	reportRedeemProgress(ctx, l.svcCtx, in.UserId, l.Logger)
 
 	return &hc.RedeemResponse{Order: toOrderInfo(order)}, nil

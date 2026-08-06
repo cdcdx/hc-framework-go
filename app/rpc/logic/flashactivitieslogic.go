@@ -42,7 +42,7 @@ func (l *FlashActivitiesLogic) FlashActivities(in *hc.FlashActivitiesRequest) (*
 	cacheKey := fmt.Sprintf("flash:activities:%d", limit)
 	if cached, err := l.svcCtx.CachedGet(l.ctx, cacheKey, func(ctx context.Context) ([]byte, error) {
 		return l.loadAndMarshal(limit)
-	}); err == nil && cached != nil {
+	}, 30*time.Second); err == nil && cached != nil {
 		var resp hc.FlashActivitiesResponse
 		if err := json.Unmarshal(cached, &resp); err == nil {
 			return &resp, nil

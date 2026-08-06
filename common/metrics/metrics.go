@@ -152,3 +152,12 @@ var MQConsumeDurationSeconds = promauto.NewHistogramVec(
 	},
 	[]string{"topic"},
 )
+
+// MQDeadLetterTotal 死信消息计数，按 topic 区分（重试耗尽进入死信队列）。
+var MQDeadLetterTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "mq_dead_letter_total",
+		Help: "进入死信队列的消息总数（重试耗尽），按 topic 区分。",
+	},
+	[]string{"topic"},
+)

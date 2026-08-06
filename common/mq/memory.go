@@ -16,8 +16,12 @@ type memoryProducer struct {
 
 // memoryConsumer 进程内队列消费者。
 type memoryConsumer struct {
-	broker *memoryBroker
-	done   chan struct{}
+	broker     *memoryBroker
+	done       chan struct{}
+	handler    Handler       // 当前订阅的处理函数
+	retries    int           // 单条消息最大重试次数（默认 3）
+	retryDelay time.Duration // 重试间隔（默认 50ms，指数退避上限 500ms）
+	dlq        Handler       // 死信处理器：重试耗尽后投递；为 nil 时仅记日志丢弃
 }
 
 // memoryBroker 进程内消息代理（单例，同进程共享）
@@ -80,7 +84,64 @@ func (p *memoryProducer) Close() error { return nil }
 
 func newMemoryConsumer(cfg Config) *memoryConsumer {
 	b := getBroker(cfg.Memory.BufferSize)
-	return &memoryConsumer{broker: b, done: make(chan struct{})}
+	// 默认重试 3 次、退避 50ms（指数上限 500ms）；可由配置覆盖。
+	retries := cfg.Memory.MaxRetries
+	if retries <= 0 {
+		retries = 3
+	}
+	delay := cfg.Memory.RetryDelay
+	if delay <= 0 {
+		delay = 50 * time.Millisecond
+	}
+	return &memoryConsumer{broker: b, done: make(chan struct{}), retries: retries, retryDelay: delay}
+}
+
+// SetDLQ 设置死信处理器：消息在重试耗尽后仍失败时投递至此。
+// 不调用则退化为仅记日志丢弃。
+func (c *memoryConsumer) SetDLQ(h Handler) {
+	c.dlq = h
+}
+
+// dispatch 执行 handler 并处理重试与死信：返回 nil 表示最终成功（或已入死信）。
+func (c *memoryConsumer) dispatch(ctx context.Context, topic string, msg *Message) {
+	start := time.Now()
+	var lastErr error
+	delay := c.retryDelay
+	for attempt := 0; attempt <= c.retries; attempt++ {
+		if attempt > 0 {
+			// 指数退避，上限 500ms，避免重试风暴。
+			backoff := delay
+			if backoff > 500*time.Millisecond {
+				backoff = 500 * time.Millisecond
+			}
+			time.Sleep(backoff)
+			delay *= 2
+		}
+		err := c.handleOnce(ctx, msg)
+		if err == nil {
+			metrics.MQConsumeDurationSeconds.WithLabelValues(topic).Observe(time.Since(start).Seconds())
+			metrics.MQConsumeTotal.WithLabelValues(topic, "ok").Inc()
+			return
+		}
+		lastErr = err
+		metrics.MQConsumeTotal.WithLabelValues(topic, "retry").Inc()
+		logx.WithContext(ctx).Errorf("[mq-memory] handler error topic=%s attempt=%d: %v", topic, attempt+1, err)
+	}
+	// 重试耗尽 → 死信。
+	metrics.MQConsumeTotal.WithLabelValues(topic, "dlq").Inc()
+	metrics.MQDeadLetterTotal.WithLabelValues(topic).Inc()
+	if c.dlq != nil {
+		if derr := c.dlq(ctx, msg); derr != nil {
+			logx.WithContext(ctx).Errorf("[mq-memory] DLQ handler error topic=%s: %v", topic, derr)
+		}
+		return
+	}
+	logx.WithContext(ctx).Errorf("[mq-memory] message dead-lettered (no DLQ handler) topic=%s key=%s: %v", topic, msg.Key, lastErr)
+}
+
+// handleOnce 包装单条处理；handler 返回 ErrSkip 时视为需忽略（不重试）。
+func (c *memoryConsumer) handleOnce(ctx context.Context, msg *Message) error {
+	return c.handler(ctx, msg)
 }
 
 func (c *memoryConsumer) Subscribe(ctx context.Context, topic string, handler Handler) error {
@@ -88,6 +149,9 @@ func (c *memoryConsumer) Subscribe(ctx context.Context, topic string, handler Ha
 	c.broker.mu.Lock()
 	c.broker.topics[topic] = append(c.broker.topics[topic], ch)
 	c.broker.mu.Unlock()
+
+	// 保存 handler，供 dispatch 调用（保持不可变引用）。
+	c.handler = handler
 
 	go func() {
 		defer func() {
@@ -112,15 +176,7 @@ func (c *memoryConsumer) Subscribe(ctx context.Context, topic string, handler Ha
 				if !ok {
 					return
 				}
-				start := time.Now()
-				err := handler(ctx, msg)
-				metrics.MQConsumeDurationSeconds.WithLabelValues(topic).Observe(time.Since(start).Seconds())
-				if err != nil {
-					metrics.MQConsumeTotal.WithLabelValues(topic, "error").Inc()
-					logx.WithContext(ctx).Errorf("[mq-memory] handler error topic=%s: %v", topic, err)
-				} else {
-					metrics.MQConsumeTotal.WithLabelValues(topic, "ok").Inc()
-				}
+				c.dispatch(ctx, topic, msg)
 			}
 		}
 	}()

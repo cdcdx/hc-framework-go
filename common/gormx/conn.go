@@ -76,7 +76,7 @@ func OpenWithPool(driver, dsn string, pool PoolConfig) (*gorm.DB, error) {
 	db, err := gorm.Open(dialector, &gorm.Config{
 		// 忽略 ErrRecordNotFound 的日志（幂等查询的正常路径，不是错误）。
 		// 慢查询 (>200ms) 和普通 SQL 仍正常打印。
-		Logger: &ignoreNotFoundLogger{delegate: logger.Default.LogMode(logger.Warn)},
+		// Logger: &ignoreNotFoundLogger{delegate: logger.Default.LogMode(logger.Warn)},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open %s db: %w", driver, err)

@@ -112,5 +112,10 @@ func (l *RedeemLogic) Redeem(in *hc.ShopRedeemRequest) (*hc.RedeemResponse, erro
 	// 兑换进度上报（进程内 task 域，失败不阻塞主流程）
 	reportRedeemProgress(ctx, l.svcCtx, in.UserId, l.Logger)
 
+	// 真实写路径：库存已扣减，主动失效商品列表缓存（短 TTL 兜底），保证下单后库存视图及时刷新。
+	if l.svcCtx.Cache != nil {
+		InvalidateItemsCache(l.svcCtx)
+	}
+
 	return &hc.RedeemResponse{Order: toOrderInfo(order)}, nil
 }

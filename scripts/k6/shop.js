@@ -37,10 +37,13 @@ export const options = {
 };
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
-// 默认压测商品 id=1（库存 500 / 积分价 0 / 在售）。
+// 默认压测商品 id=1（库存 500 / 积分价 1 / 在售）。
+// 注意：price_points 必须为正数，服务端校验会拒绝 0（返回 10001 points must be positive）。
+// 同时用户必须有足够积分，否则 Redeem 会「先扣库存 → 扣积分失败 → 回滚库存」，
+// 表现为大量 10301（积分不足）夹杂 10302（库存不足，实为回滚竞争的假象）。
 // 注意：早期版本曾因缓存层布隆过滤器误判（!exists 被短路为“不存在”）导致所有
 // FindItemByID 返回 10303，该问题已在服务端修复；若仍报 10303，请确认服务已重启
-// 并预置 item 1 的 stock=500 / price_points=0 / is_active=1。
+// 并预置 item 1 的 stock=500 / price_points=1 / is_active=1。
 const ITEM_ID = __ENV.ITEM_ID || '1';
 // 初始库存：用于 teardown 服务端库存对账。实际应以压测前 DB 真实库存为准，可通过环境变量覆盖。
 const INITIAL_STOCK = __ENV.INITIAL_STOCK ? parseInt(__ENV.INITIAL_STOCK) : 500;

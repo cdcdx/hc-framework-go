@@ -50,11 +50,12 @@ func (l *AddPointsLogic) AddPoints(in *hc.AddPointsRequest) (*hc.AddPointsRespon
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
 
-	var balance int64
-	if err := l.svcCtx.Db.Model(&model.User{}).
-		Where("user_id = ?", in.UserId).
-		Pluck("points_balance", &balance).Error; err != nil {
-		return nil, errorx.NewErr(errorx.CodeDBError, err)
+	// 余额 = 更新前查询值 + 增量（原子更新已在 DB 完成，此处仅用于返回，省去一次 Pluck 查询）。
+	// 并发下可能略旧，但客户端下次刷新可拿到最新值；如需精确可改走 Pluck。
+	newBalance := u.PointsBalance + in.Points
+	// 余额已变更，失效缓存（短 TTL 兜底，这里主动失效保证读一致性）
+	if l.svcCtx.Cache != nil {
+		_ = l.svcCtx.Cache.Delete(l.ctx, pointsBalanceKey(in.UserId))
 	}
-	return &hc.AddPointsResponse{UserId: in.UserId, PointsBalance: balance}, nil
+	return &hc.AddPointsResponse{UserId: in.UserId, PointsBalance: newBalance}, nil
 }

@@ -190,7 +190,7 @@ Rpc:
   # 各后端配置完全独立、互不互通。切换 Type 即可启用对应后端，
   # 其余子段可保留不删。
   MQ:
-    Enabled: false
+    Enabled: true
     Type: memory
     # Memory 专用（完全独立）
     Memory:

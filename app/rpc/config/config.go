@@ -291,6 +291,11 @@ type Config struct {
 
 	BcryptCost int
 
+	// InitialPointsBalance 新用户注册时的初始积分余额。
+	// GORM 在 Create 时会把结构体零值一并写入，DB 层 DEFAULT 不会生效，
+	// 因此注册逻辑必须显式赋值。
+	InitialPointsBalance int64 `json:",default=1000"`
+
 	GoogleOAuth struct {
 		ClientID     string
 		ClientSecret string
@@ -400,7 +405,9 @@ func (c L2CacheConfig) ToCacheL2() cache.L2Config {
 }
 
 type MQConfig struct {
-	Enabled bool   `json:",default=false"`
+	// Enabled 默认开启：memory 模式无外部依赖，开箱即用，使任务进度上报等
+	// 异步解耦默认生效；生产可切 kafka/rocketmq 等并显式配置。
+	Enabled bool   `json:",default=true"`
 	Type    string `json:",default=memory"`
 	// 各后端配置完全独立、互不互通。切换 Type 后只读取对应子段。
 	Kafka    KafkaMQConfig    `json:",optional"`

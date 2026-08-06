@@ -56,11 +56,12 @@ func (l *RegisterLogic) Register(in *hc.RegisterRequest) (*hc.RegisterResponse, 
 	}
 
 	u := &model.User{
-		UserID:       uuid.NewString(),
-		Username:     username,
-		Email:        in.Email,
-		PasswordHash: hash,
-		Status:       "active",
+		UserID:        uuid.NewString(),
+		Username:      username,
+		Email:         in.Email,
+		PasswordHash:  hash,
+		PointsBalance: l.svcCtx.Config.InitialPointsBalance,
+		Status:        "active",
 	}
 	if err := l.svcCtx.Db.Create(u).Error; err != nil {
 		return nil, errorx.NewErr(errorx.CodeDBError, err)

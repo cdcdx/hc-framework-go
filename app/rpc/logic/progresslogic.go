@@ -25,7 +25,7 @@ func NewProgressLogic(ctx context.Context, svcCtx *svc.ServiceContext) *Progress
 }
 
 func (l *ProgressLogic) Progress(in *hc.TaskProgressRequest) (*hc.TaskProgressResponse, error) {
-	tasks, err := loadTaskInfos(l.svcCtx.Db, in.UserId)
+	tasks, err := loadTaskInfos(l.svcCtx, in.UserId)
 	if err != nil {
 		return nil, errorx.NewErr(errorx.CodeDBError, err)
 	}
